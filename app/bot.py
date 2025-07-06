@@ -385,6 +385,12 @@ def main() -> None:
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не установлен!")
         return
+
+    admin_id_int = int(ADMIN_ID) if ADMIN_ID is not None else None
+    if admin_id_int is not None and not database.is_user_allowed(DB_PATH, admin_id_int):
+        logger.info(f"Добавление администратора {admin_id_int} в базу при первом запуске.")
+        database.add_user(DB_PATH, admin_id_int, is_admin=True)
+
     application = Application.builder().token(TOKEN).concurrent_updates(True).build()
 
     application.add_handler(CommandHandler("start", start_command))
