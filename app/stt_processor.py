@@ -12,6 +12,8 @@ load_dotenv()
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 BEAM_SIZE = os.getenv("WHISPER_BEAM_SIZE", "5")
+CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "10"))
+NUM_WORKERS = int(os.getenv("WHISPER_NUM_WORKERS", "1"))
 
 try:
     logger.info(
@@ -22,6 +24,8 @@ try:
         device="cpu",
         compute_type=COMPUTE_TYPE,
         download_root="./data/whisper_models",
+        cpu_threads=CPU_THREADS,
+        num_workers=NUM_WORKERS,
     )
     logger.info(f"Модель Faster-Whisper '{WHISPER_MODEL}' успешно загружена.")
 except Exception as e:
