@@ -1,0 +1,39 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: whisper-redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  telegram-stt-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telegram-stt-bot:latest
+    container_name: telegram-stt-bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+
+  huey-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: telegram-stt-bot:latest
+    container_name: huey-worker
+    restart: always
+    command: ["python", "-u", "huey_consumer.py"]
+    env_file:
+      - .env
+    environment:
+      - HUEY_WORKER_COUNT=1
+      - HUEY_WORKER_TYPE=process
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
