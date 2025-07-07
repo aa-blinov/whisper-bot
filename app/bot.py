@@ -171,6 +171,7 @@ async def remove_user_command(
         if update.message:
             await update.message.reply_text(
                 f"Пользователь с ID `{user_to_remove_id}` успешно удалён из списка разрешённых.",
+                parse_mode="Markdown",
                 reply_markup=get_admin_keyboard(),
             )
     except ValueError:
@@ -350,6 +351,7 @@ async def handle_admin_id_input(
                 database.add_user(DB_PATH, target_id)
                 await update.message.reply_text(
                     f"Пользователь с ID `{target_id}` успешно добавлен в список разрешённых!",
+                    parse_mode="Markdown",
                     reply_markup=get_admin_keyboard(),
                 )
                 try:
@@ -368,6 +370,7 @@ async def handle_admin_id_input(
                 database.remove_user(DB_PATH, target_id)
                 await update.message.reply_text(
                     f"Пользователь с ID `{target_id}` успешно удалён из списка разрешённых.",
+                    parse_mode="Markdown",
                     reply_markup=get_admin_keyboard(),
                 )
             if hasattr(context, "user_data") and context.user_data is not None:
