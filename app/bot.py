@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -231,11 +232,11 @@ async def list_users_command(
     for u_id, is_admin_flag, first_name, last_name, username in users:
         status = " (Админ)" if is_admin_flag else ""
         name = f"{first_name or ''} {last_name or ''}".strip()
-        username_str = f" (@{username})" if username else ""
+        username_str = f" (@{escape_md(username)})" if username else ""
         if name or username_str:
-            message_text += f"- `{u_id}`{status} — {name}{username_str}\n"
+            message_text += f"- `{escape_md(str(u_id))}`{status} — {escape_md(name)}{username_str}\n"
         else:
-            message_text += f"- `{u_id}`{status}\n"
+            message_text += f"- `{escape_md(str(u_id))}`{status}\n"
     if update.message:
         await update.message.reply_text(message_text, parse_mode="Markdown")
 
@@ -489,6 +490,14 @@ async def handle_admin_id_input(
             )
             if hasattr(context, "user_data") and context.user_data is not None:
                 context.user_data["admin_action"] = None
+
+
+def escape_md(text: str) -> str:
+    """Экранирует спецсимволы Markdown (не V2)."""
+    if not text:
+        return ""
+    # Экранируем только символы для обычного Markdown
+    return re.sub(r'([_\*\[\]()`])', r'\\\1', text)
 
 
 def main() -> None:
