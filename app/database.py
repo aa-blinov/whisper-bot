@@ -20,6 +20,18 @@ def init_db(db_name: str) -> None:
             )
             """
         )
+        cursor.execute("PRAGMA table_info(users)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        for col, coltype in [
+            ("first_name", "TEXT"),
+            ("last_name", "TEXT"),
+            ("username", "TEXT")
+        ]:
+            if col not in existing_cols:
+                try:
+                    cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {coltype}")
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"Ошибка миграции users: {e}")
 
         cursor.execute(
             """
@@ -58,13 +70,20 @@ def init_db(db_name: str) -> None:
         logger.error(f"Ошибка инициализации базы данных: {e}")
 
 
-def add_user(db_name: str, user_id: int, is_admin: bool = False) -> None:
+def add_user(
+    db_name: str,
+    user_id: int,
+    is_admin: bool = False,
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+) -> None:
     try:
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT OR REPLACE INTO users (user_id, is_admin) VALUES (?, ?)",
-            (user_id, is_admin),
+            "INSERT OR REPLACE INTO users (user_id, is_admin, first_name, last_name, username) VALUES (?, ?, ?, ?, ?)",
+            (user_id, is_admin, first_name, last_name, username),
         )
         conn.commit()
         conn.close()
@@ -98,11 +117,11 @@ def is_user_allowed(db_name: str, user_id: int) -> bool:
         return False
 
 
-def get_all_users(db_name: str) -> list[tuple[int, bool]]:
+def get_all_users(db_name: str) -> list[tuple[int, bool, str, str, str]]:
     try:
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
-        cursor.execute("SELECT user_id, is_admin FROM users")
+        cursor.execute("SELECT user_id, is_admin, first_name, last_name, username FROM users")
         users = cursor.fetchall()
         conn.close()
         return users

@@ -228,9 +228,14 @@ async def list_users_command(
         return
 
     message_text = "Список разрешенных пользователей: \n\n"
-    for u_id, is_admin_flag in users:
+    for u_id, is_admin_flag, first_name, last_name, username in users:
         status = " (Админ)" if is_admin_flag else ""
-        message_text += f"- `{u_id}`{status}\n"
+        name = f"{first_name or ''} {last_name or ''}".strip()
+        username_str = f" (@{username})" if username else ""
+        if name or username_str:
+            message_text += f"- `{u_id}`{status} — {name}{username_str}\n"
+        else:
+            message_text += f"- `{u_id}`{status}\n"
     if update.message:
         await update.message.reply_text(message_text, parse_mode="Markdown")
 
@@ -441,7 +446,16 @@ async def handle_admin_id_input(
         try:
             target_id = int(text)
             if action == "add":
-                database.add_user(DB_PATH, target_id)
+                try:
+                    chat = await context.bot.get_chat(target_id)
+                    first_name = chat.first_name or ""
+                    last_name = chat.last_name or ""
+                    username = chat.username or ""
+                except Exception:
+                    first_name = ""
+                    last_name = ""
+                    username = ""
+                database.add_user(DB_PATH, target_id, first_name=first_name, last_name=last_name, username=username)
                 await update.message.reply_text(
                     f"Пользователь с ID `{target_id}` успешно добавлен в список разрешённых!",
                     parse_mode="Markdown",
