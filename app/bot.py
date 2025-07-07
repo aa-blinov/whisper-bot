@@ -53,9 +53,15 @@ def get_admin_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 
-def get_language_keyboard() -> ReplyKeyboardMarkup:
-    """Получить клавиатуру для выбора языка распознавания."""
-    keyboard = [[KeyboardButton("Русский")], [KeyboardButton("Английский")]]
+def get_language_keyboard(current_lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Получить клавиатуру для выбора языка с пометкой текущего языка."""
+    ru_label = "Русский"
+    en_label = "Английский"
+    if current_lang == "ru":
+        ru_label += " (выбран)"
+    elif current_lang == "en":
+        en_label += " (выбран)"
+    keyboard = [[KeyboardButton(ru_label)], [KeyboardButton(en_label)]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 
@@ -231,10 +237,13 @@ async def list_users_command(
 
 async def handle_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /language для выбора языка распознавания."""
+    current_lang = "ru"
+    if hasattr(context, "user_data") and context.user_data is not None:
+        current_lang = context.user_data.get("lang", "ru")
     if update.message:
         await update.message.reply_text(
-            "Пожалуйста, выберите язык для распознавания:",
-            reply_markup=get_language_keyboard(),
+            f"Пожалуйста, выберите язык для распознавания (текущий: {'Русский' if current_lang == 'ru' else 'Английский'}):",
+            reply_markup=get_language_keyboard(current_lang),
         )
 
 
@@ -263,9 +272,10 @@ async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
         )
     else:
+        current_lang = context.user_data.get("lang", "ru")
         await update.message.reply_text(
             "Пожалуйста, выберите язык с помощью кнопок ниже.",
-            reply_markup=get_language_keyboard(),
+            reply_markup=get_language_keyboard(current_lang),
         )
 
 
