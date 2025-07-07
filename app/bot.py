@@ -169,7 +169,7 @@ async def remove_user_command(
             return
         message_text = "Список разрешённых пользователей:\n\n"
         keyboard = []
-        for u_id, is_admin_flag in users:
+        for u_id, is_admin_flag, *_ in users:
             status = " (Админ)" if is_admin_flag else ""
             message_text += f"- `{u_id}`{status}\n"
             if not is_admin_flag:
