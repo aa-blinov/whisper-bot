@@ -39,16 +39,29 @@ database.init_db(DB_PATH)
 
 
 def get_admin_keyboard() -> ReplyKeyboardMarkup:
-    """Получить клавиатуру для административных команд."""
+    """Получить клавиатуру для административных команд с кнопкой выбора языка."""
     keyboard = [
+        [
+            KeyboardButton("Язык"),
+            KeyboardButton("Список пользователей"),
+        ],
         [
             KeyboardButton("Добавить пользователя"),
             KeyboardButton("Удалить пользователя"),
         ],
-        [
-            KeyboardButton("Список пользователей"),
-        ],
     ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+
+def get_language_keyboard() -> ReplyKeyboardMarkup:
+    """Получить клавиатуру для выбора языка распознавания."""
+    keyboard = [[KeyboardButton("Русский")], [KeyboardButton("Английский")]]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+
+def get_user_keyboard() -> ReplyKeyboardMarkup:
+    """Получить клавиатуру для обычных пользователей с кнопкой выбора языка."""
+    keyboard = [[KeyboardButton("Язык")]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 
@@ -70,7 +83,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             if update.message:
                 await update.message.reply_text(
                     f"Привет, {user_name}! Я готов конвертировать твои голосовые сообщения и видео-кружки в текст. "
-                    "Просто отправь мне их!"
+                    "Просто отправь мне их!",
+                    reply_markup=get_user_keyboard(),
                 )
     else:
         if update.message:
@@ -215,7 +229,48 @@ async def list_users_command(
         await update.message.reply_text(message_text, parse_mode="Markdown")
 
 
+async def handle_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /language для выбора языка распознавания."""
+    if update.message:
+        await update.message.reply_text(
+            "Пожалуйста, выберите язык для распознавания:",
+            reply_markup=get_language_keyboard(),
+        )
+
+
+async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик выбора языка пользователем."""
+    if not update.message or not update.message.text:
+        return
+    text = update.message.text.strip().lower()
+    if not hasattr(context, "user_data") or context.user_data is None:
+        context.user_data = {}
+    is_admin = False
+    user = update.effective_user
+    user_id = user.id if user else None
+    if ADMIN_ID is not None and user_id == ADMIN_ID:
+        is_admin = True
+    if "англ" in text:
+        context.user_data["lang"] = "en"
+        await update.message.reply_text(
+            "Выбран английский язык. Теперь отправьте голосовое сообщение или видео-кружок.",
+            reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
+        )
+    elif "рус" in text:
+        context.user_data["lang"] = "ru"
+        await update.message.reply_text(
+            "Выбран русский язык. Теперь отправьте голосовое сообщение или видео-кружок.",
+            reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, выберите язык с помощью кнопок ниже.",
+            reply_markup=get_language_keyboard(),
+        )
+
+
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик получения голосовых сообщений и видео-кружков."""
     user = update.effective_user
     user_id = user.id if user else None
 
@@ -225,6 +280,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Извини, у тебя нет доступа для отправки медиа. Пожалуйста, свяжись с администратором."
             )
         return
+
+    if not hasattr(context, "user_data") or context.user_data is None:
+        context.user_data = {}
+    language = context.user_data.get("lang", "ru")
 
     file_obj = None
     file_type: str = ""
@@ -271,9 +330,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if status_message:
             await status_message.edit_text("Файл скачан. Запускаю транскрибацию...")
 
-        huey_task = transcribe_task(file_path, file_type)
+        huey_task = transcribe_task(file_path, file_type, language)
         try:
-            raw_text = await aget_result(
+            transcribe_result = await aget_result(
                 huey_task, backoff=1.15, max_delay=1.0, preserve=False
             )
         except Exception as e:
@@ -284,6 +343,15 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
             return
         duration = time.time() - start_time
+
+        if not transcribe_result or not isinstance(transcribe_result, (list, tuple)):
+            if update.message:
+                await update.message.reply_text(
+                    "Не удалось распознать текст. Возможно, аудио было слишком коротким или нечетким."
+                )
+            return
+
+        raw_text, lang = transcribe_result if len(transcribe_result) == 2 else (transcribe_result[0], None)
 
         final_text = raw_text
         if raw_text:
@@ -301,21 +369,35 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             else:
                 if status_message:
                     await status_message.edit_text(
-                        "Исправление текста не потребовалась или не удалось исправить. Отправляю ответ..."
+                        "Исправление текста не потребовалось или не удалось исправить. Отправляю ответ..."
                     )
 
         if final_text:
             if update.message:
+                is_admin = False
+                user = update.effective_user
+                user_id = user.id if user else None
+                if ADMIN_ID is not None and user_id == ADMIN_ID:
+                    is_admin = True
                 await update.message.reply_text(
-                    f"`{final_text}`", parse_mode="Markdown"
+                    f"`{final_text}`",
+                    parse_mode="Markdown",
+                    reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
                 )
-            database.record_task_metadata(
-                DB_PATH, user_id, duration, file_type, final_text
-            )
+            if user_id is not None:
+                database.record_task_metadata(
+                    DB_PATH, user_id, duration, file_type, final_text
+                )
         else:
             if update.message:
+                is_admin = False
+                user = update.effective_user
+                user_id = user.id if user else None
+                if ADMIN_ID is not None and user_id == ADMIN_ID:
+                    is_admin = True
                 await update.message.reply_text(
-                    "Не удалось распознать текст. Возможно, аудио было слишком коротким или нечетким."
+                    "Не удалось распознать текст. Возможно, аудио было слишком коротким или нечетким.",
+                    reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
                 )
 
     except asyncio.CancelledError:
@@ -335,6 +417,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def handle_admin_id_input(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    """Обработчик ввода ID пользователя для добавления или удаления."""
     user = update.effective_user
     user_id = user.id if user else None
     if ADMIN_ID is None or user_id != ADMIN_ID:
@@ -385,6 +468,7 @@ async def handle_admin_id_input(
 
 
 def main() -> None:
+    """Запуск бота."""
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN не установлен!")
         return
@@ -423,6 +507,15 @@ def main() -> None:
 
     application.add_handler(
         MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_media)
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.Regex("Язык"), handle_language_menu
+        )
+    )
+    application.add_handler(
+        MessageHandler(filters.TEXT & filters.Regex("^(Русский|Английский)"), handle_language_choice)
     )
 
     logger.info("Бот запущен! 🤖")

@@ -33,25 +33,26 @@ except Exception as e:
     model = None
 
 
-def transcribe_audio(audio_path: str) -> str | None:
+def transcribe_audio(audio_path: str, language: str = "ru") -> tuple[str | None, str | None]:
     logger.info(f"Начало transcribe_audio для файла: {audio_path}")
     if model is None:
         logger.error("Модель Whisper не загружена. Невозможно выполнить транскрибацию.")
-        return None
+        return None, None
     try:
         logger.info(f"Начало транскрибации файла: {audio_path}")
-        segments, info = model.transcribe(audio_path, language="ru", beam_size=5)
+        segments, info = model.transcribe(audio_path, language=language, beam_size=5)
 
         full_text = []
         for segment in segments:
             full_text.append(segment.text)
 
         text = " ".join(full_text).strip()
-        logger.info(f"Транскрибация завершена. Текст: {text[:100]}...")
-        return text
+        lang = getattr(info, "language", None)
+        logger.info(f"Транскрибация завершена. Текст: {text[:100]}... Язык: {lang}")
+        return text, lang
     except Exception as e:
         logger.exception(f"Ошибка при транскрибации аудио: {e}")
-        return None
+        return None, None
 
 
 def extract_audio_from_video(video_path: str, output_audio_path: str) -> bool:
@@ -67,9 +68,9 @@ def extract_audio_from_video(video_path: str, output_audio_path: str) -> bool:
         return False
 
 
-def transcribe_media_sync(file_path: str, file_type: str) -> str | None:
+def transcribe_media_sync(file_path: str, file_type: str, language: str = "ru") -> tuple[str | None, str | None]:
     logger.info(
-        f"Начало transcribe_media_sync для файла: {file_path}, тип: {file_type}"
+        f"Начало transcribe_media_sync для файла: {file_path}, тип: {file_type}, язык: {language}"
     )
     audio_to_transcribe_path = file_path
     temp_audio_file = None
@@ -79,11 +80,11 @@ def transcribe_media_sync(file_path: str, file_type: str) -> str | None:
             temp_audio_file = file_path + ".mp3"
             success = extract_audio_from_video(file_path, temp_audio_file)
             if not success:
-                return None
+                return None, None
             audio_to_transcribe_path = temp_audio_file
 
-        text = transcribe_audio(audio_to_transcribe_path)
-        return text
+        text, lang = transcribe_audio(audio_to_transcribe_path, language=language)
+        return text, lang
     finally:
         if temp_audio_file and os.path.exists(temp_audio_file):
             os.remove(temp_audio_file)
