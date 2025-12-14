@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -239,6 +240,37 @@ async def list_users_command(
             message_text += f"- `{escape_md(str(u_id))}`{status}\n"
     if update.message:
         await update.message.reply_text(message_text, parse_mode="Markdown")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /stats для отображения статистики бота."""
+    user = update.effective_user
+    user_id = user.id if user else None
+    if ADMIN_ID is None or user_id != ADMIN_ID:
+        if update.message:
+            await update.message.reply_text(
+                "Извини, эта команда доступна только администратору."
+            )
+        return
+
+    stats = database.get_bot_stats(DB_PATH)
+    
+    # Получаем текущую дату в формате DD.MM.YYYY
+    today = datetime.now().strftime("%d.%m.%Y")
+    
+    message_text = "📊 Статистика бота\n\n"
+    message_text += f"👥 Всего пользователей: {stats['total_users']}\n\n"
+    message_text += f"📅 Сегодня ({today}):\n"
+    message_text += f"   • Активных: {stats['today_active']}\n"
+    message_text += f"   • Запросов на STT: {stats['today_requests']}\n"
+    message_text += f"   • Новых: {stats['today_new']}\n\n"
+    message_text += "📈 За последние 7 дней:\n"
+    message_text += f"   • Активных: {stats['week_active']}\n"
+    message_text += f"   • Запросов на STT: {stats['week_requests']}\n"
+    message_text += f"   • Новых: {stats['week_new']}"
+    
+    if update.message:
+        await update.message.reply_text(message_text)
 
 
 async def handle_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -524,6 +556,7 @@ def main() -> None:
     application.add_handler(CommandHandler("add_user", add_user_command))
     application.add_handler(CommandHandler("remove_user", remove_user_command))
     application.add_handler(CommandHandler("list_users", list_users_command))
+    application.add_handler(CommandHandler("stats", stats_command))
 
     application.add_handler(
         MessageHandler(

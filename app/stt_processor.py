@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 
 from dotenv import load_dotenv
 
@@ -14,30 +15,90 @@ COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 BEAM_SIZE = os.getenv("WHISPER_BEAM_SIZE", "5")
 CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "10"))
 NUM_WORKERS = int(os.getenv("WHISPER_NUM_WORKERS", "1"))
+DOWNLOAD_ROOT = "./data/whisper_models"
 
-try:
-    logger.info(
-        f"Загрузка модели Faster-Whisper '{WHISPER_MODEL}' с compute_type='{COMPUTE_TYPE}'..."
-    )
-    model = WhisperModel(
-        WHISPER_MODEL,
-        device="cpu",
-        compute_type=COMPUTE_TYPE,
-        download_root="./data/whisper_models",
-        cpu_threads=CPU_THREADS,
-        num_workers=NUM_WORKERS,
-    )
-    logger.info(f"Модель Faster-Whisper '{WHISPER_MODEL}' успешно загружена.")
-except Exception as e:
-    logger.exception(f"Ошибка загрузки модели Faster-Whisper: {e}")
-    model = None
+# Создаем директорию для моделей, если её нет
+os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+
+# Подавляем предупреждения о правах доступа от huggingface_hub
+# Эти предупреждения не критичны и возникают из-за особенностей работы с временными файлами
+os.environ["HF_HUB_DISABLE_EXPERIMENTAL_WARNING"] = "1"
+
+# Устанавливаем HF_TOKEN для аутентификации в Hugging Face Hub (если указан)
+# huggingface_hub поддерживает оба варианта имени переменной
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN
+    logger.info("HF_TOKEN установлен для аутентификации в Hugging Face Hub")
+else:
+    logger.info("HF_TOKEN не установлен. Будут использоваться неаутентифицированные запросы к HF Hub.")
+
+model = None
+
+
+def _load_model() -> bool:
+    """Загрузить модель Whisper. Возвращает True при успехе, False при ошибке."""
+    global model
+    try:
+        logger.info(
+            f"Загрузка модели Faster-Whisper '{WHISPER_MODEL}' с compute_type='{COMPUTE_TYPE}'..."
+        )
+        model = WhisperModel(
+            WHISPER_MODEL,
+            device="cpu",
+            compute_type=COMPUTE_TYPE,
+            download_root=DOWNLOAD_ROOT,
+            cpu_threads=CPU_THREADS,
+            num_workers=NUM_WORKERS,
+        )
+        logger.info(f"Модель Faster-Whisper '{WHISPER_MODEL}' успешно загружена.")
+        return True
+    except Exception as e:
+        logger.exception(f"Ошибка загрузки модели Faster-Whisper: {e}")
+        model = None
+        return False
+
+
+def _remove_corrupted_model() -> None:
+    """Удалить поврежденную модель для перезагрузки."""
+    try:
+        # Ищем директорию модели в download_root
+        # faster-whisper использует формат: models--Systran--faster-whisper-{model_name}
+        model_path = os.path.join(DOWNLOAD_ROOT, f"models--Systran--faster-whisper-{WHISPER_MODEL}")
+        if os.path.exists(model_path):
+            logger.warning(f"Удаление поврежденной модели: {model_path}")
+            shutil.rmtree(model_path)
+            logger.info(f"Поврежденная модель удалена: {model_path}")
+        else:
+            # Пробуем найти любую директорию с именем модели
+            if os.path.exists(DOWNLOAD_ROOT):
+                for item in os.listdir(DOWNLOAD_ROOT):
+                    item_path = os.path.join(DOWNLOAD_ROOT, item)
+                    if os.path.isdir(item_path) and WHISPER_MODEL in item:
+                        logger.warning(f"Удаление возможной поврежденной модели: {item_path}")
+                        shutil.rmtree(item_path)
+                        logger.info(f"Директория удалена: {item_path}")
+    except Exception as e:
+        logger.warning(f"Не удалось удалить поврежденную модель: {e}")
+
+
+# Попытка загрузить модель при импорте
+if not _load_model():
+    # Если не удалось загрузить, возможно модель повреждена - удаляем и пробуем снова
+    logger.warning("Попытка удалить поврежденную модель и перезагрузить...")
+    _remove_corrupted_model()
+    _load_model()
 
 
 def transcribe_audio(audio_path: str, language: str = "ru") -> tuple[str | None, str | None]:
     logger.info(f"Начало transcribe_audio для файла: {audio_path}")
+    global model
     if model is None:
-        logger.error("Модель Whisper не загружена. Невозможно выполнить транскрибацию.")
-        return None, None
+        logger.warning("Модель Whisper не загружена. Попытка перезагрузки...")
+        if not _load_model():
+            logger.error("Модель Whisper не загружена. Невозможно выполнить транскрибацию.")
+            return None, None
     try:
         logger.info(f"Начало транскрибации файла: {audio_path}")
         beam_size = int(BEAM_SIZE)

@@ -55,6 +55,7 @@
    DB_PATH=data/bot_database.db
    WHISPER_MODEL=small
    WHISPER_COMPUTE_TYPE=int8
+   HF_TOKEN=your_huggingface_token  # Опционально: для более быстрой загрузки моделей
    OPENROUTER_API_KEY=your_bot_openrouter_api_token
    OPENROUTER_MODEL_NAME=your_favorite_model_name
    ```

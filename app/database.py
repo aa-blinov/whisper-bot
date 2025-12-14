@@ -2,7 +2,7 @@ import logging
 import os
 import sqlite3
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -155,3 +155,133 @@ def record_task_metadata(
         logger.error(
             f"Ошибка при записи метаданных задачи для пользователя {user_id}: {e}"
         )
+
+
+def get_bot_stats(db_name: str) -> dict:
+    """
+    Получить статистику бота.
+    Возвращает словарь с данными:
+    - total_users: всего пользователей
+    - today_active: активных сегодня (уникальных пользователей с задачами)
+    - today_requests: запросов на STT сегодня
+    - today_new: новых пользователей сегодня
+    - week_active: активных за последние 7 дней
+    - week_requests: запросов на STT за последние 7 дней
+    - week_new: новых пользователей за последние 7 дней
+    """
+    try:
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
+        
+        # Получаем текущую дату и дату начала дня
+        now = datetime.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_start = week_start - timedelta(days=7)
+        
+        today_start_str = today_start.isoformat()
+        week_start_str = week_start.isoformat()
+        now_str = now.isoformat()
+        
+        # Всего пользователей
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        # Статистика за сегодня
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) 
+            FROM tasks 
+            WHERE timestamp >= ? AND timestamp <= ?
+            """,
+            (today_start_str, now_str)
+        )
+        today_active = cursor.fetchone()[0]
+        
+        cursor.execute(
+            """
+            SELECT COUNT(*) 
+            FROM tasks 
+            WHERE timestamp >= ? AND timestamp <= ?
+            """,
+            (today_start_str, now_str)
+        )
+        today_requests = cursor.fetchone()[0]
+        
+        # Новые пользователи сегодня (нужно проверить, когда пользователь был добавлен)
+        # Так как у нас нет поля created_at в users, будем считать новыми тех,
+        # у кого первая задача была сегодня
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT user_id)
+            FROM tasks t1
+            WHERE t1.timestamp >= ? AND t1.timestamp <= ?
+            AND NOT EXISTS (
+                SELECT 1 FROM tasks t2 
+                WHERE t2.user_id = t1.user_id 
+                AND t2.timestamp < ?
+            )
+            """,
+            (today_start_str, now_str, today_start_str)
+        )
+        today_new = cursor.fetchone()[0]
+        
+        # Статистика за последние 7 дней
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT user_id) 
+            FROM tasks 
+            WHERE timestamp >= ? AND timestamp <= ?
+            """,
+            (week_start_str, now_str)
+        )
+        week_active = cursor.fetchone()[0]
+        
+        cursor.execute(
+            """
+            SELECT COUNT(*) 
+            FROM tasks 
+            WHERE timestamp >= ? AND timestamp <= ?
+            """,
+            (week_start_str, now_str)
+        )
+        week_requests = cursor.fetchone()[0]
+        
+        # Новые пользователи за последние 7 дней
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT user_id)
+            FROM tasks t1
+            WHERE t1.timestamp >= ? AND t1.timestamp <= ?
+            AND NOT EXISTS (
+                SELECT 1 FROM tasks t2 
+                WHERE t2.user_id = t1.user_id 
+                AND t2.timestamp < ?
+            )
+            """,
+            (week_start_str, now_str, week_start_str)
+        )
+        week_new = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return {
+            "total_users": total_users,
+            "today_active": today_active,
+            "today_requests": today_requests,
+            "today_new": today_new,
+            "week_active": week_active,
+            "week_requests": week_requests,
+            "week_new": week_new,
+        }
+    except sqlite3.Error as e:
+        logger.error(f"Ошибка при получении статистики: {e}")
+        return {
+            "total_users": 0,
+            "today_active": 0,
+            "today_requests": 0,
+            "today_new": 0,
+            "week_active": 0,
+            "week_requests": 0,
+            "week_new": 0,
+        }

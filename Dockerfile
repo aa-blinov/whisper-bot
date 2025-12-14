@@ -20,6 +20,8 @@ COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/pytho
 
 COPY app/ .
 
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && \
+    mkdir -p /app/data/whisper_models && \
+    chmod -R 777 /app/data
 
 CMD ["python", "-u", "bot.py"]
