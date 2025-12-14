@@ -41,6 +41,9 @@ def _load_model() -> bool:
     """Загрузить модель Whisper. Возвращает True при успехе, False при ошибке."""
     global model
     try:
+        # Убеждаемся, что директория существует перед загрузкой
+        os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
+        
         logger.info(
             f"Загрузка модели Faster-Whisper '{WHISPER_MODEL}' с compute_type='{COMPUTE_TYPE}'..."
         )
@@ -55,32 +58,58 @@ def _load_model() -> bool:
         logger.info(f"Модель Faster-Whisper '{WHISPER_MODEL}' успешно загружена.")
         return True
     except Exception as e:
-        logger.exception(f"Ошибка загрузки модели Faster-Whisper: {e}")
+        # Проверяем, является ли ошибка связанной с поврежденной моделью
+        error_str = str(e)
+        if "parse error" in error_str or "json.exception" in error_str or "No such file or directory" in error_str:
+            logger.warning(f"Обнаружена ошибка загрузки модели (возможно повреждена): {e}")
+        else:
+            logger.exception(f"Ошибка загрузки модели Faster-Whisper: {e}")
         model = None
         return False
 
 
 def _remove_corrupted_model() -> None:
     """Удалить поврежденную модель для перезагрузки."""
+    import time
     try:
         # Ищем директорию модели в download_root
         # faster-whisper использует формат: models--Systran--faster-whisper-{model_name}
         model_path = os.path.join(DOWNLOAD_ROOT, f"models--Systran--faster-whisper-{WHISPER_MODEL}")
-        if os.path.exists(model_path):
-            logger.warning(f"Удаление поврежденной модели: {model_path}")
-            shutil.rmtree(model_path)
-            logger.info(f"Поврежденная модель удалена: {model_path}")
-        else:
-            # Пробуем найти любую директорию с именем модели
-            if os.path.exists(DOWNLOAD_ROOT):
-                for item in os.listdir(DOWNLOAD_ROOT):
-                    item_path = os.path.join(DOWNLOAD_ROOT, item)
-                    if os.path.isdir(item_path) and WHISPER_MODEL in item:
-                        logger.warning(f"Удаление возможной поврежденной модели: {item_path}")
-                        shutil.rmtree(item_path)
-                        logger.info(f"Директория удалена: {item_path}")
+        
+        # Пробуем несколько раз удалить, так как другой процесс может использовать файлы
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if os.path.exists(model_path):
+                    logger.warning(f"Удаление поврежденной модели (попытка {attempt + 1}/{max_retries}): {model_path}")
+                    # Удаляем всю директорию модели
+                    shutil.rmtree(model_path, ignore_errors=True)
+                    # Даем время другим процессам завершить работу
+                    time.sleep(0.5)
+                    if not os.path.exists(model_path):
+                        logger.info(f"Поврежденная модель успешно удалена: {model_path}")
+                        break
+                else:
+                    # Пробуем найти любую директорию с именем модели
+                    if os.path.exists(DOWNLOAD_ROOT):
+                        for item in os.listdir(DOWNLOAD_ROOT):
+                            item_path = os.path.join(DOWNLOAD_ROOT, item)
+                            if os.path.isdir(item_path) and WHISPER_MODEL in item:
+                                logger.warning(f"Удаление возможной поврежденной модели: {item_path}")
+                                shutil.rmtree(item_path, ignore_errors=True)
+                                time.sleep(0.5)
+                                if not os.path.exists(item_path):
+                                    logger.info(f"Директория удалена: {item_path}")
+                                    break
+                    break
+            except (OSError, PermissionError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Не удалось удалить модель (попытка {attempt + 1}), повтор через 1 секунду: {e}")
+                    time.sleep(1)
+                else:
+                    logger.error(f"Не удалось удалить поврежденную модель после {max_retries} попыток: {e}")
     except Exception as e:
-        logger.warning(f"Не удалось удалить поврежденную модель: {e}")
+        logger.warning(f"Ошибка при удалении поврежденной модели: {e}")
 
 
 # Попытка загрузить модель при импорте
