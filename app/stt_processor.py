@@ -40,7 +40,8 @@ def transcribe_audio(audio_path: str, language: str = "ru") -> tuple[str | None,
         return None, None
     try:
         logger.info(f"Начало транскрибации файла: {audio_path}")
-        segments, info = model.transcribe(audio_path, language=language, beam_size=5)
+        beam_size = int(BEAM_SIZE)
+        segments, info = model.transcribe(audio_path, language=language, beam_size=beam_size)
 
         full_text = []
         for segment in segments:
@@ -84,8 +85,19 @@ def transcribe_media_sync(file_path: str, file_type: str, language: str = "ru") 
             audio_to_transcribe_path = temp_audio_file
 
         text, lang = transcribe_audio(audio_to_transcribe_path, language=language)
+        # Удаляем временный файл сразу после обработки
+        if temp_audio_file and os.path.exists(temp_audio_file):
+            try:
+                os.remove(temp_audio_file)
+                logger.info(f"Временный аудиофайл удален: {temp_audio_file}")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить временный файл {temp_audio_file}: {e}")
         return text, lang
     finally:
+        # Дополнительная проверка на случай, если файл не был удален выше
         if temp_audio_file and os.path.exists(temp_audio_file):
-            os.remove(temp_audio_file)
-            logger.info(f"Временный аудиофайл удален: {temp_audio_file}")
+            try:
+                os.remove(temp_audio_file)
+                logger.info(f"Временный аудиофайл удален в finally: {temp_audio_file}")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить временный файл {temp_audio_file} в finally: {e}")

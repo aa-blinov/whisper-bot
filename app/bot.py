@@ -427,7 +427,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Произошла внутренняя ошибка при обработке. Пожалуйста, попробуй еще раз позже."
             )
     finally:
-        pass
+        # Удаляем файл, если он еще существует (на случай ошибок до обработки в huey)
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"Файл удален в finally блоке: {file_path}")
+            except Exception as e:
+                logger.warning(f"Не удалось удалить файл {file_path} в finally: {e}")
 
 
 async def handle_admin_id_input(
