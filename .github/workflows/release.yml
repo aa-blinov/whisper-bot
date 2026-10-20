@@ -1,0 +1,44 @@
+name: release
+
+# Tag-triggered release. A tag of v* produces a release with the artefacts
+# the project ships, and the changelog section for that version becomes the
+# release body.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Extract the version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION"
+
+      - name: Build
+        # Replace with the real build. The rule is that the artefact that
+        # ships is produced by the same command the README documents.
+        run: echo "Replace with the build command for this stack."
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body_path: CHANGELOG.md
