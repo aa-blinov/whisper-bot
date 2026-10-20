@@ -254,10 +254,10 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     stats = database.get_bot_stats(DB_PATH)
-    
+
     # Получаем текущую дату в формате DD.MM.YYYY
     today = datetime.now().strftime("%d.%m.%Y")
-    
+
     message_text = "📊 Статистика бота\n\n"
     message_text += f"👥 Всего пользователей: {stats['total_users']}\n\n"
     message_text += f"📅 Сегодня ({today}):\n"
@@ -268,7 +268,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     message_text += f"   • Активных: {stats['week_active']}\n"
     message_text += f"   • Запросов на STT: {stats['week_requests']}\n"
     message_text += f"   • Новых: {stats['week_new']}"
-    
+
     if update.message:
         await update.message.reply_text(message_text)
 

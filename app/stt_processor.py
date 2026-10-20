@@ -43,7 +43,7 @@ def _load_model() -> bool:
     try:
         # Убеждаемся, что директория существует перед загрузкой
         os.makedirs(DOWNLOAD_ROOT, exist_ok=True)
-        
+
         logger.info(
             f"Загрузка модели Faster-Whisper '{WHISPER_MODEL}' с compute_type='{COMPUTE_TYPE}'..."
         )
@@ -75,7 +75,7 @@ def _remove_corrupted_model() -> None:
         # Ищем директорию модели в download_root
         # faster-whisper использует формат: models--Systran--faster-whisper-{model_name}
         model_path = os.path.join(DOWNLOAD_ROOT, f"models--Systran--faster-whisper-{WHISPER_MODEL}")
-        
+
         # Пробуем несколько раз удалить, так как другой процесс может использовать файлы
         max_retries = 3
         for attempt in range(max_retries):

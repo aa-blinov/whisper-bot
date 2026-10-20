@@ -172,42 +172,42 @@ def get_bot_stats(db_name: str) -> dict:
     try:
         conn = sqlite3.connect(db_name)
         cursor = conn.cursor()
-        
+
         # Получаем текущую дату и дату начала дня
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = week_start - timedelta(days=7)
-        
+
         today_start_str = today_start.isoformat()
         week_start_str = week_start.isoformat()
         now_str = now.isoformat()
-        
+
         # Всего пользователей
         cursor.execute("SELECT COUNT(*) FROM users")
         total_users = cursor.fetchone()[0]
-        
+
         # Статистика за сегодня
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT user_id) 
-            FROM tasks 
+            SELECT COUNT(DISTINCT user_id)
+            FROM tasks
             WHERE timestamp >= ? AND timestamp <= ?
             """,
             (today_start_str, now_str)
         )
         today_active = cursor.fetchone()[0]
-        
+
         cursor.execute(
             """
-            SELECT COUNT(*) 
-            FROM tasks 
+            SELECT COUNT(*)
+            FROM tasks
             WHERE timestamp >= ? AND timestamp <= ?
             """,
             (today_start_str, now_str)
         )
         today_requests = cursor.fetchone()[0]
-        
+
         # Новые пользователи сегодня (нужно проверить, когда пользователь был добавлен)
         # Так как у нас нет поля created_at в users, будем считать новыми тех,
         # у кого первая задача была сегодня
@@ -217,36 +217,36 @@ def get_bot_stats(db_name: str) -> dict:
             FROM tasks t1
             WHERE t1.timestamp >= ? AND t1.timestamp <= ?
             AND NOT EXISTS (
-                SELECT 1 FROM tasks t2 
-                WHERE t2.user_id = t1.user_id 
+                SELECT 1 FROM tasks t2
+                WHERE t2.user_id = t1.user_id
                 AND t2.timestamp < ?
             )
             """,
             (today_start_str, now_str, today_start_str)
         )
         today_new = cursor.fetchone()[0]
-        
+
         # Статистика за последние 7 дней
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT user_id) 
-            FROM tasks 
+            SELECT COUNT(DISTINCT user_id)
+            FROM tasks
             WHERE timestamp >= ? AND timestamp <= ?
             """,
             (week_start_str, now_str)
         )
         week_active = cursor.fetchone()[0]
-        
+
         cursor.execute(
             """
-            SELECT COUNT(*) 
-            FROM tasks 
+            SELECT COUNT(*)
+            FROM tasks
             WHERE timestamp >= ? AND timestamp <= ?
             """,
             (week_start_str, now_str)
         )
         week_requests = cursor.fetchone()[0]
-        
+
         # Новые пользователи за последние 7 дней
         cursor.execute(
             """
@@ -254,17 +254,17 @@ def get_bot_stats(db_name: str) -> dict:
             FROM tasks t1
             WHERE t1.timestamp >= ? AND t1.timestamp <= ?
             AND NOT EXISTS (
-                SELECT 1 FROM tasks t2 
-                WHERE t2.user_id = t1.user_id 
+                SELECT 1 FROM tasks t2
+                WHERE t2.user_id = t1.user_id
                 AND t2.timestamp < ?
             )
             """,
             (week_start_str, now_str, week_start_str)
         )
         week_new = cursor.fetchone()[0]
-        
+
         conn.close()
-        
+
         return {
             "total_users": total_users,
             "today_active": today_active,
