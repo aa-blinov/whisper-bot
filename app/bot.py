@@ -1,3 +1,6 @@
+# house-style: emoji-ok
+# The emoji here are the product: they are what the user
+# sees in a message or a button. See docs/house-style.md.
 import asyncio
 import logging
 import os
