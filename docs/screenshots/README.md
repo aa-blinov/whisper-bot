@@ -1,20 +1,32 @@
-<!-- house-style: template — fill this file in, then delete this line -->
-
 # Screenshots
 
-Images referenced from the README and the documents.
+There are no screenshots in this folder, and there is no image anywhere in the
+repository. The bot has no interface of its own to capture: the whole surface
+is Telegram's chat window and the reply keyboard the client draws.
 
-<!--
-  Put the files here and reference them from the README:
+## What stands in for a picture
 
-  ```markdown
-  ![The main window](docs/screenshots/main.png)
-  ```
+The screens are written down instead, in [../../DESIGN.md](../../DESIGN.md):
 
-  Images are referenced by relative path, so they resolve both on GitHub and
-  in a local checkout. The house-style checker verifies that every image
-  reference points at a file that exists, so a renamed screenshot cannot
-  quietly break the README.
+- The reply keyboard, one column for a user and two for the administrator.
+- The language picker, with the current language marked.
+- The status message and the four states it is edited through.
+- The transcript, sent as a code span under the voice message.
+- The `/stats` screen, with its pictographs and its counters.
 
-  Delete this file once the project has images of its own.
--->
+The strings are quoted from the code, so a reader can see exactly what a
+person receives.
+
+## Adding one
+
+A capture of the chat belongs in this folder and is referenced by relative
+path, the way the README does:
+
+```markdown
+![The reply keyboard](docs/screenshots/keyboard.png)
+```
+
+The checker resolves every image reference, so a file that is renamed without
+its reference being updated fails the build. A capture of the chat contains
+the names and the messages of real people, so it needs the same care as the
+transcripts themselves.
