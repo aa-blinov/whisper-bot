@@ -1,4 +1,4 @@
-FROM python:3.10.18-slim AS builder
+FROM python:3.14.7-slim AS builder
 
 WORKDIR /app
 
@@ -6,7 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
-FROM python:3.10.18-slim AS app
+FROM python:3.14.7-slim AS app
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
