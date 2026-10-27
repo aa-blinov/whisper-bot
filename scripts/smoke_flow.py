@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
@@ -64,11 +65,12 @@ from app.bot.app import build_application  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.container import build_services  # noqa: E402
 from app.infra import database  # noqa: E402
-from app.services.transcription import TranscriptionTimeout  # noqa: E402
+from app.services.transcription import TranscriptTooLong, TranscriptionTimeout  # noqa: E402
 
 SAMPLE = os.environ.get("SMOKE_AUDIO", "data/_test/sample.mp3")
 SAMPLE_EN = os.environ.get("SMOKE_AUDIO_EN", "data/_test/sample_en.mp3")
 SAMPLE_VIDEO = os.environ.get("SMOKE_VIDEO", "data/_test/sample.mp4")
+SAMPLE_LONG = os.environ.get("SMOKE_LONG", "data/_test/long.mp3")
 ADMIN_ID = 111
 GUEST_ID = 222
 NEWCOMER_ID = 333
@@ -151,6 +153,7 @@ async def run() -> None:
     has_audio = os.path.exists(SAMPLE)
     has_video = os.path.exists(SAMPLE_VIDEO)
     has_english = os.path.exists(SAMPLE_EN)
+    has_long = os.path.exists(SAMPLE_LONG)
     if not has_audio:
         print(f"нет файла {SAMPLE}: шаги с распознаванием будут пропущены")
     if not has_video:
@@ -613,6 +616,61 @@ async def run() -> None:
         ):
             await process({"message": timeout_voice})
         check(any("затянулось" in text for text in texts()), "таймаут объяснён")
+
+        # 16b. Слишком длинный документ, поймано воркером.
+        print("16b. Документ длиннее лимита")
+        sent.clear()
+        with patch.object(Voice, "get_file", fake_get_file), patch(
+            "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE
+        ), patch.object(
+            service,
+            "transcribe",
+            AsyncMock(side_effect=TranscriptTooLong(400)),
+        ):
+            await process({"message": timeout_voice})
+        check(any("Запись длится 400" in text for text in texts()), "длина объяснена")
+        # 16c. Ссылка не попадает в лог, лимит длины проверяет воркер.
+        print("16c. Токен в логах и лимит длины")
+        from app.infra.asr import Recognizer, _scrub
+
+        check(
+            "SECRET" not in _scrub("https://api.telegram.org/file/bot1:SECRET/x.mp3"),
+            "токен вырезан из текста ошибки",
+        )
+        if has_long:
+            recognizer = Recognizer(
+                settings.asr_model,
+                settings.asr_model_en,
+                settings.asr_quantization,
+                settings.asr_threads,
+            )
+            text, lang, too_long = recognizer.transcribe_source(
+                SAMPLE_LONG, language="ru", max_seconds=30
+            )
+            check(text is None and lang is None, "текста нет")
+            check(bool(too_long) and too_long > 30, "воркер вернул длительность")
+        else:
+            print("  skip  нет длинного файла")
+
+        # 17. Гонка за первого администратора: ровно один.
+        print("17. Гонка за первого админа")
+        with database.connect(settings.database_url) as conn:
+            conn.execute("DELETE FROM users")
+        results: list[bool] = []
+
+        def claim(user_id: int) -> None:
+            results.append(database.claim_first_admin(settings.database_url, user_id))
+
+        threads = [
+            threading.Thread(target=claim, args=(user_id,)) for user_id in (501, 502)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        admins = [user for user in database.list_users(settings.database_url) if user.is_admin]
+        check(sum(1 for value in results if value) == 1, "права получил ровно один")
+        check(len(admins) == 1, "админ в базе один")
     finally:
         await application.shutdown()
         stack.close()

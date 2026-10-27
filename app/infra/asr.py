@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import threading
@@ -19,6 +20,14 @@ import threading
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Ссылка Telegram содержит токен бота. Её нельзя писать в логи, а ffmpeg
+# охотно повторяет её в stderr, поэтому любую ссылку заменяем заглушкой.
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _scrub(text: str) -> str:
+    return _URL_RE.sub("<url>", text)
 
 SAMPLE_RATE = 16_000
 # GigaAM обучена на окнах до 30 с; 25 с оставляют запас и не режут речь
@@ -169,14 +178,12 @@ class Recognizer:
         try:
             completed = subprocess.run(command, capture_output=True, check=False, timeout=120)
         except (OSError, subprocess.SubprocessError) as exc:
-            logger.warning("ffmpeg не запустился: %s", exc)
+            # str(TimeoutExpired) содержит всю команду, включая ссылку с токеном.
+            logger.warning("ffmpeg не запустился: %s", _scrub(str(exc)))
             return None
         if completed.returncode != 0:
-            logger.warning(
-                "ffmpeg вернул код %s: %s",
-                completed.returncode,
-                completed.stderr.decode("utf-8", "replace").strip()[:400],
-            )
+            stderr = _scrub(completed.stderr.decode("utf-8", "replace")).strip()
+            logger.warning("ffmpeg вернул код %s: %s", completed.returncode, stderr[:400])
             return None
         return np.frombuffer(completed.stdout, dtype=np.float32).copy()
 
@@ -193,20 +200,34 @@ class Recognizer:
         return buf
 
     def transcribe_source(
-        self, source: str, language: str = "ru"
-    ) -> tuple[str | None, str | None]:
+        self, source: str, language: str = "ru", max_seconds: int = 0
+    ) -> tuple[str | None, str | None, int | None]:
         """Распознать локальный файл или ссылку Telegram.
 
         Ссылку ffmpeg читает сам, поэтому копии файла на диске нет. Логи
         не должны печатать источник: в ссылке лежит токен бота.
+
+        Третий элемент ответа — длительность, если запись оказалась длиннее
+        `max_seconds`. У документов Telegram нет поля `duration`, поэтому
+        лимит проверяется по декодированному звуку.
         """
         if source.startswith(("http://", "https://")):
             audio = self._decode_with_ffmpeg(source)
             if audio is None:
                 logger.error("Не удалось прочитать аудио по ссылке Telegram")
-                return None, None
-            return self.transcribe_audio(audio, language=language)
-        return self.transcribe_file(source, language=language)
+                return None, None, None
+        else:
+            audio = self.decode(source)
+            if audio is None:
+                return None, None, None
+
+        duration = int(round(len(audio) / SAMPLE_RATE))
+        if max_seconds and duration > max_seconds:
+            logger.info("Запись длиннее лимита: %s с > %s с", duration, max_seconds)
+            return None, None, duration
+
+        text, recognized = self.transcribe_audio(audio, language=language)
+        return text, recognized, None
 
     # --- распознавание ----------------------------------------------------
 

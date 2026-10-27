@@ -72,8 +72,14 @@ read over HTTPS.
   takes `file_path` (a full URL with the bot token in it) and enqueues that.
   `app/infra/asr.py` hands the URL to ffmpeg, which streams and decodes in
   memory. There is no copy on disk and nothing to clean up. Consequence: the
-  URL contains the token, so it must never be logged, and it expires in about
-  an hour, which is fine because the task starts immediately.
+  URL contains the token, so it must never be logged; ffmpeg repeats it in
+  stderr, so `_scrub` replaces every URL with `<url>` before any log call, and
+  `TimeoutExpired` is scrubbed too. It expires in about an hour, which is fine
+  because the task starts immediately.
+- **The duration limit for documents is checked after decoding.** Telegram
+  gives a `document` no `duration`, so `Recognizer.transcribe_source` measures
+  the decoded audio and returns the real length; `TranscriptTooLong` turns it
+  into the same message the bot uses for voice messages.
 - **Telegram gives bots files up to 20 MB.** `get_file` fails above that, so
   `handlers/media.py` checks `file_size` first and answers with a clear
   message. The limit is Bot API's, not ours.

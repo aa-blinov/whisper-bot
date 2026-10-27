@@ -95,17 +95,17 @@ class AccessService:
     def claim_first_admin(self, user_id: int, **profile) -> bool:
         """Пока админа нет ни в `.env`, ни в базе, первый написавший становится им.
 
-        True, если запись действительно удалась: если база не пишется,
-        вызывающий не должен считать человека админом.
+        Проверка и запись атомарны на стороне базы: одновременные `/start`
+        не сделают админами обоих. False, если роль уже занята.
         """
-        if self.admin_ids or database.has_admins(self.database_url):
+        if self.admin_ids:
             return False
-        granted = self.grant(user_id, is_admin=True, **profile)
-        if not granted:
-            logger.error("Не удалось записать первого администратора %s", user_id)
-            return False
-        logger.warning("ADMIN_ID не задан: администратором стал первый написавший, %s", user_id)
-        return True
+        claimed = database.claim_first_admin(self.database_url, user_id, **profile)
+        if claimed:
+            logger.warning(
+                "ADMIN_ID не задан: администратором стал первый написавший, %s", user_id
+            )
+        return claimed
 
     # --- язык -------------------------------------------------------------
 

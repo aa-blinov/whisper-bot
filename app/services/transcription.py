@@ -17,6 +17,14 @@ class TranscriptionTimeout(RuntimeError):
     """Воркер не ответил за отведённое время."""
 
 
+class TranscriptTooLong(RuntimeError):
+    """Запись оказалась длиннее лимита, который знает воркер."""
+
+    def __init__(self, seconds: int) -> None:
+        super().__init__(f"запись длится {seconds} с")
+        self.seconds = seconds
+
+
 class TranscriptionService:
     """Один запрос распознавания: задача в Huey, потом ожидание ответа."""
 
@@ -56,7 +64,15 @@ class TranscriptionService:
         # Чистим сразу: иначе каждый запрос оставляет ключ на час.
         self._discard(task.id)
 
-        if not isinstance(result, (list, tuple)) or not result or not result[0]:
+        if not isinstance(result, (list, tuple)) or not result:
+            return None
+
+        # Воркер отвечает (текст, язык, длительность-если-слишком-длинно).
+        too_long = result[2] if len(result) > 2 else None
+        if too_long:
+            raise TranscriptTooLong(int(too_long))
+
+        if not result[0]:
             return None
 
         text = str(result[0])

@@ -127,6 +127,17 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Fixed
 
+- **The bot token could reach the logs through ffmpeg.** When a Telegram URL
+  failed to open, ffmpeg printed it in stderr and the message was logged
+  verbatim. `_scrub` replaces every URL with `<url>` before logging, including
+  the text of a `TimeoutExpired`.
+- **Two simultaneous `/start` on a fresh database made two administrators.**
+  The check-then-act gap is closed with a transactional advisory lock inside
+  `database.claim_first_admin`.
+- **The duration limit was skipped for audio and video documents.** Telegram
+  gives a document no `duration` field. The worker now measures the decoded
+  audio and returns the real length, and the handler shows the same "запись
+  длится N с" message.
 - **A long transcript with HTML characters could be rejected.** The text was
   split before escaping, so a 3800-character chunk full of `<` or `&` grew
   past Telegram's 4096 limit after escaping. The transcript is escaped first

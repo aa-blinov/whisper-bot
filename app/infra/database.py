@@ -217,6 +217,41 @@ def remove_user(database_url: str, user_id: int) -> bool:
         return False
 
 
+def claim_first_admin(
+    database_url: str,
+    user_id: int,
+    *,
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+) -> bool:
+    """Сделать первого написавшего администратором ровно один раз.
+
+    Проверка и вставка идут под транзакционной advisory-блокировкой:
+    два одновременных `/start` на свежей базе иначе оба видят «админов
+    нет» и оба получают права.
+    """
+    try:
+        with connect(database_url) as conn:
+            conn.execute("SELECT pg_advisory_xact_lock(918273645)")
+            existing = conn.execute(
+                "SELECT 1 AS one FROM users WHERE is_admin LIMIT 1"
+            ).fetchone()
+            if existing is not None:
+                return False
+            conn.execute(
+                """INSERT INTO users (user_id, is_admin, first_name, last_name, username)
+                   VALUES (%s, TRUE, %s, %s, %s)
+                   ON CONFLICT (user_id) DO UPDATE SET is_admin = TRUE""",
+                (user_id, first_name or "", last_name or "", username or ""),
+            )
+        logger.info("Первый администратор: %s", user_id)
+        return True
+    except psycopg.Error as exc:
+        logger.error("Не удалось записать первого администратора %s: %s", user_id, exc)
+        return False
+
+
 def set_language(database_url: str, user_id: int, language: str) -> None:
     """Запомнить выбранный язык, чтобы он переживал перезапуск бота."""
     try:

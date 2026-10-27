@@ -18,7 +18,7 @@ from app.bot import deps, keyboards, texts
 from app.bot.formatting import transcript_blocks
 from app.bot.handlers.common import deny_access, ensure_profile
 from app.bot.handlers.guards import is_admin
-from app.services.transcription import TranscriptionTimeout
+from app.services.transcription import TranscriptionTimeout, TranscriptTooLong
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +149,13 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         except TranscriptionTimeout:
             await status.edit_text(texts.TIMEOUT)
+            return
+        except TranscriptTooLong as exc:
+            # У документа нет поля duration, поэтому лимит ловится уже
+            # после декодирования в воркере.
+            await status.edit_text(
+                texts.media_too_long(exc.seconds, settings.max_media_seconds)
+            )
             return
 
         if transcript is None or not transcript.text:

@@ -47,4 +47,6 @@ def transcribe_task(source: str, file_type: str, language: str = "ru"):
         settings.asr_quantization,
         settings.asr_threads,
     )
-    return recognizer.transcribe_source(source, language=language)
+    return recognizer.transcribe_source(
+        source, language=language, max_seconds=settings.max_media_seconds
+    )
