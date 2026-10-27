@@ -750,12 +750,15 @@ tbody th {
 .chat-transcript {
   margin: 0;
   padding: 10px 12px;
-  border-left: 2px solid var(--accent);
+  border: 1px solid var(--line);
   border-radius: 10px 10px 10px 4px;
-  background: var(--surface);
+  background: var(--surface-2);
   box-shadow: var(--rest);
-  font-size: 0.82rem;
+  font-family: inherit;
+  font-size: 0.78rem;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-card {

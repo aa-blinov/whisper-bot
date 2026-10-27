@@ -34,5 +34,9 @@ def split_text(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
 
 
 def transcript_blocks(text: str) -> list[str]:
-    """Куски расшифровки, каждый уже в HTML-разметке."""
-    return [f"<blockquote>{escape(chunk)}</blockquote>" for chunk in split_text(text)]
+    """Куски расшифровки, каждый в HTML-разметке.
+
+    Текст идёт блоком кода: у такого сообщения в клиентах Телеграма есть
+    кнопка «копировать», а расшифровку почти всегда копируют.
+    """
+    return [f"<pre>{escape(chunk)}</pre>" for chunk in split_text(text)]

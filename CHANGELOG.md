@@ -25,6 +25,11 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Changed
 
+- **The transcript arrives as a code block.** A message with a `<pre>` block
+  has a copy button in every Telegram client, and a transcript is almost
+  always copied. The text stays escaped, long answers are still split, and
+  the page shows the same style.
+
 - **The loading is now measurable and predictable.** The worker warms the
   Russian and the English models before it reports healthy, so a message sent
   during the first start waits in the queue instead of failing on a download:

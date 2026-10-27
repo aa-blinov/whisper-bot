@@ -164,6 +164,11 @@ voice message and the MP4 of a video note.
   or `infra` imports `bot`, and handlers never open SQLite directly.
 - **Every reply is HTML.** `Defaults(parse_mode=ParseMode.HTML)` is set once
   in `app/bot/app.py`.
+- **The transcript is a `<pre>` block.** Telegram shows a copy button for
+  code blocks and a transcript is copied, so `formatting.transcript_blocks`
+  wraps each chunk in `<pre>`, not in a quote. Keep the escaping and the
+  splitting: a `pre` block with raw `<` or a chunk above 4096 characters is
+  a rejected message.
 - **The model stays on the CPU.** `onnxruntime` CPU wheels and
   `providers=["CPUExecutionProvider"]` are one decision written twice.
 - **Every dependency is pinned.** A new dependency that needs a system

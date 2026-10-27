@@ -274,7 +274,7 @@ async def run() -> None:
             with patch.object(Voice, "get_file", fake_get_file):
                 await process({"message": voice_message})
 
-            transcript = [text for text in texts() if "blockquote" in text]
+            transcript = [text for text in texts() if "<pre>" in text]
             check(bool(transcript), "ответ с расшифровкой отправлен")
             if transcript:
                 body = transcript[0]

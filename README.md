@@ -73,7 +73,8 @@ the file.
   punctuation, capital letters and normalised numbers by itself. No second
   punctuation step and no cloud call in the middle.
 - **Answers in the same chat.** The reply lands under the message, and the
-  status line under it is edited while the transcription runs.
+  status line under it is edited while the transcription runs. The transcript
+  is a `<pre>` block, so every Telegram client offers its copy button.
 - **Keeps answering while it works.** The audio is queued, so a slow
   transcription never blocks the next message.
 - **Remembers every request.** Each finished transcription is stored in SQLite
