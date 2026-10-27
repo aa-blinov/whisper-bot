@@ -1,5 +1,5 @@
 faster-whisper==1.2.1
-huey==3.4.0
+huey==3.5.3
 pydub==0.25.1
 python-dotenv==1.2.4
 python-telegram-bot==22.8
