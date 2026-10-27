@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from pathlib import Path
 
 import httpx
@@ -17,6 +18,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.warnings import PTBUserWarning
 
 from app.bot import keyboards
 from app.bot.handlers import admin
@@ -26,6 +28,11 @@ from app.config import Settings
 from app.container import Services
 
 logger = logging.getLogger(__name__)
+
+# Диалог добавления начинается с кнопки и продолжается текстом, поэтому
+# per_message=True здесь неверен, а предупреждение PTB об этом только шумит
+# в логах.
+warnings.filterwarnings("ignore", message=r".*per_message.*", category=PTBUserWarning)
 
 AVATAR_PATH = Path(__file__).resolve().parent.parent / "assets" / "bot_avatar.png"
 READY_FILE = os.getenv("BOT_READY_FILE", "/tmp/bot-ready")
