@@ -169,6 +169,38 @@ burst above held the bot event loop to about 40 ms of lag, all of it Postgres
 writes. Postgres takes them without a lock and the pool is shared by the
 process.
 
+## Server sizing
+
+Memory is flat, CPU is the variable. Measured on this host with the worker
+pinned to a CPU quota to imitate a smaller server, two worker threads:
+
+| vCPU | `ASR_THREADS` | 58 s audio | 20 clients, 12 s each | RAM |
+| --- | --- | --- | --- | --- |
+| 2 | 1 | 5.9 s | 14 s | 0.9 GB |
+| 2 | 2 | 4.0 s | 15 s | 0.9 GB |
+| 4 | 2 | 4.0 s | 11 s | 0.9 GB |
+| 8+ | 0 (auto) | 2.6 to 4.9 s | 11 s | 0.9 GB |
+| 2 | 0 (auto) | 19 s | 72 s | 0.9 GB |
+
+The last row is the trap: `ASR_THREADS=0` lets onnxruntime open one thread per
+core, and on a 2 vCPU box sixteen threads fight over two cores. Set
+`ASR_THREADS=1` or `2` on a 2 vCPU server.
+
+Where the 0.9 GB goes at idle and under load: worker 763 MB (the two ONNX
+models, shared by both threads), bot 49 to 84 MB, Postgres 38 to 43 MB,
+Redis 6 to 7 MB. The model is loaded once, so memory does not grow with the
+number of requests; a 300-second buffer adds about 19 MB per running task.
+
+Disk: the image is 1.1 GB, the model cache 318 MB, Postgres and Redis a few
+hundred megabytes together.
+
+- **Minimum:** 2 vCPU, 2 GB RAM, 20 GB SSD, `ASR_THREADS=1`. A minute of
+  audio comes back in about 6 seconds, a burst of twenty short messages in 14.
+- **Comfortable:** 4 vCPU, 4 GB RAM, `ASR_THREADS=2`. A minute in about 4
+  seconds, the same burst in 11.
+- **More than 8 vCPU buys little:** the work is already parallel inside the
+  two workers, and memory stays under 1 GB.
+
 ## Configuration
 
 Everything is an environment variable, read from `.env` when the process

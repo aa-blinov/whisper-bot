@@ -110,7 +110,9 @@ read over HTTPS.
   level and both containers hold a copy of the session.
 - **`ASR_THREADS` reaches onnxruntime through `SessionOptions`.** `0` means
   "let onnxruntime decide by core count"; the worker passes the value to
-  `Recognizer`.
+  `Recognizer`. On a 2 vCPU server set it to 1 or 2: with `0` the library
+  opens a thread per visible core and sixteen threads fight over two cores
+  (measured: a minute of audio took 19 s instead of 6).
 - **Two worker threads share one process and one model.** The compose file
   sets `HUEY_WORKER_COUNT=2` and `HUEY_WORKER_TYPE=thread`. The entry point
   turns those variables into Huey's `-w` and `-k` flags, because Huey reads
