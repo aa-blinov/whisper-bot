@@ -61,15 +61,8 @@ class Settings:
     asr_threads: int = 4
     max_media_seconds: int = 300
 
-    openrouter_api_key: str | None = None
-    openrouter_model: str = "openai/gpt-oss-20b:free"
-
     # Разобранный `.env` держим рядом, чтобы не перечитывать файл в тестах.
     raw: dict[str, str] = field(default_factory=dict)
-
-    @property
-    def llm_enabled(self) -> bool:
-        return bool(self.openrouter_api_key)
 
 
 def load() -> Settings:
@@ -90,9 +83,6 @@ def load() -> Settings:
         asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
         asr_threads=max(1, _int(os.getenv("ASR_THREADS"), 4)),
         max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
-        openrouter_api_key=(os.getenv("OPENROUTER_API_KEY") or "").strip() or None,
-        openrouter_model=os.getenv("OPENROUTER_MODEL_NAME", "openai/gpt-oss-20b:free").strip()
-        or "openai/gpt-oss-20b:free",
     )
 
 

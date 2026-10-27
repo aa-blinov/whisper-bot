@@ -39,7 +39,6 @@ voice message and the MP4 of a video note.
 | `app/tasks.py` | The Huey instance: `RedisHuey("whisper-bot", …)` built from `Settings`. |
 | `app/huey_tasks.py` | The `transcribe_task` the bot enqueues and the file deletion. |
 | `app/huey_consumer.py` | The worker entry point: warm the model, then hand Huey the task module. |
-| `app/llm.py` | The optional OpenRouter correction, off unless `OPENROUTER_API_KEY` is set. |
 | `app/database.py` | The SQLite schema, the migrations and the counters behind `/stats`. |
 | `tests/test_bot.py` | Empty. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
@@ -72,7 +71,11 @@ voice message and the MP4 of a video note.
   directory. Check the file list before swapping the model.
 - **`duration_seconds` is wall-clock time, not the length of the audio.** It
   is measured from just before the Telegram download to the moment the reply
-  goes out, so it includes the download, the queue and the correction.
+  goes out, so it includes the download and the queue.
+- **There is no language-model step, and adding one is a product change.**
+  The transcript goes from the recogniser into the chat unchanged; the model
+  already writes punctuation. A "fix the text" call would add a third party,
+  a timeout and a second thing that can silently fail.
 - **The bot and the worker meet in the `data/` directory.** The bot writes
   `data/<uuid hex>_<type>.bin` and the worker deletes that exact path after
   the transcription. The two containers need the same bind mount.
@@ -118,8 +121,8 @@ voice message and the MP4 of a video note.
 - **The `data/` layout is a contract.** It holds the SQLite file, the
   downloaded media and the model cache (`data/hf`).
 - **The transcripts are personal data.** They are kept in
-  `data/bot_database.db`, and when the correction is switched on they are
-  sent to OpenRouter as well.
+  `data/bot_database.db` and nowhere else: no cloud call takes them off the
+  host.
 - **Secrets come from the environment.** `.env` is in `.gitignore`, and
   `.env.example` holds placeholders rather than values.
 

@@ -9,12 +9,11 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 BTN_LANGUAGE = "🌐 Язык"
-BTN_USERS = "👥 Пользователи"
+BTN_USERS = "👥 Люди"
 BTN_STATS = "📊 Статистика"
 BTN_ADMIN = "⚙️ Админ-панель"
-BTN_ADD = "➕ Добавить пользователя"
+BTN_ADD = "➕ Добавить человека"
 BTN_INVITE = "🔗 Приглашение"
-BTN_HELP = "❓ Помощь"
 BTN_CANCEL = "✖️ Отмена"
 
 BTN_RU = "🇷🇺 Русский"
@@ -72,9 +71,9 @@ def admin_home(count: int) -> InlineKeyboardMarkup:
     """Панель администратора: всё, что делается с людьми, в два нажатия."""
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(f"👥 Пользователи ({count})", callback_data="admin:list")],
+            [InlineKeyboardButton(f"👥 Люди ({count})", callback_data="admin:list")],
             [InlineKeyboardButton("➕ Добавить", callback_data="admin:add")],
-            [InlineKeyboardButton("🔗 Ссылка-приглашение", callback_data="admin:invite")],
+            [InlineKeyboardButton("🔗 Ссылка для приглашения", callback_data="admin:invite")],
             [InlineKeyboardButton("📊 Статистика", callback_data="admin:stats")],
         ]
     )
@@ -98,7 +97,7 @@ def users_list(users: list[dict]) -> InlineKeyboardMarkup:
 
 def user_card(user: dict) -> InlineKeyboardMarkup:
     user_id = user["user_id"]
-    rows = [[InlineKeyboardButton("🗑 Удалить доступ", callback_data=f"user:{user_id}:del")]]
+    rows = [[InlineKeyboardButton("🗑 Закрыть доступ", callback_data=f"user:{user_id}:del")]]
     rows.append([InlineKeyboardButton("⬅️ К списку", callback_data="admin:list")])
     return InlineKeyboardMarkup(rows)
 
@@ -108,7 +107,7 @@ def confirm_remove(user: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ Да, удалить", callback_data=f"user:{user_id}:del:yes"),
+                InlineKeyboardButton("✅ Да, закрыть", callback_data=f"user:{user_id}:del:yes"),
                 InlineKeyboardButton("⬅️ Оставить", callback_data=f"user:{user_id}"),
             ]
         ]

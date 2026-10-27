@@ -50,14 +50,11 @@ explicitly; several ids can be separated by commas.
   video message both become text, in the language the user picked.
 - **Writes with punctuation.** The Russian model is GigaAM v3 e2e, which emits
   punctuation, capital letters and normalised numbers by itself. No second
-  punctuation step, no LLM call in the middle.
+  punctuation step and no cloud call in the middle.
 - **Answers in the same chat.** The reply lands under the message, and the
   status line under it is edited while the transcription runs.
 - **Keeps answering while it works.** The audio is queued, so a slow
   transcription never blocks the next message.
-- **Corrects the transcript when asked to.** With `OPENROUTER_API_KEY` set,
-  the text goes to a model on OpenRouter that is asked to fix recognition
-  slips and nothing else. Without the key, the recogniser's text is the reply.
 - **Remembers every request.** Each finished transcription is stored in SQLite
   with the time it took, the kind of media, the language and the text.
 - **Keeps the list of allowed users.** The administrator adds a person by id,
@@ -97,7 +94,7 @@ voice message or video note
        soundfile or ffmpeg -> 16 kHz mono float32
        GigaAM v3 e2e CTC (ONNX) on the CPU, 25 s chunks
   -> Redis: the result
-  -> app/bot.py: app/llm.py (optional) -> OpenRouter -> the reply in the chat
+  -> app/bot.py: the reply in the chat
 ```
 
 The bot and the worker are separate containers, and they meet twice: in the
@@ -118,11 +115,6 @@ The bot waits for the result with `aget_result` and edits one status message
 while it waits: "Скачиваю запись…", then "Распознаю речь…". A long transcript
 is split into several messages, because Telegram caps a message at 4096
 characters.
-
-The correction, when a key is set, is one request to
-`https://openrouter.ai/api/v1/chat/completions` with `temperature=0.1`,
-`max_tokens=2048` and a timeout of 20 seconds. Any failure returns the raw
-text, and the person sending the message never sees the difference.
 
 The database is SQLite, at `DB_PATH` or `data/bot_database.db`. It has two
 tables. `users` holds the allowed ids with their names, the chosen language
@@ -149,14 +141,12 @@ starts. `.env.example` holds the same list with the values filled in.
 | `ASR_MODEL_EN` | `whisper-base` | The ONNX model that handles English. |
 | `ASR_QUANTIZATION` | `int8` | Weight precision; `int8`, `fp16` or empty for fp32. |
 | `ASR_THREADS` | `4` | Threads onnxruntime may use. |
-| `OPENROUTER_API_KEY` | none | The key for the correction request. Without it the raw text is returned. |
-| `OPENROUTER_MODEL_NAME` | `openai/gpt-oss-20b:free` | The model that does the correction. |
 | `HF_TOKEN` | none | Optional Hugging Face token, for faster downloads. |
 | `HUEY_WORKER_COUNT` | `1` | The number of worker processes. Set in `docker-compose.yml`. |
 | `HUEY_WORKER_TYPE` | `process` | The worker type. Set in `docker-compose.yml`. |
 
-Two things are not variables. The address of the OpenRouter API and the
-prompt that asks for the correction are constants in `app/llm.py`.
+Nothing talks to a cloud service. The transcript goes from the worker to the
+chat and into SQLite, and no third party sees it.
 
 ## Development
 
@@ -193,7 +183,6 @@ runner is in `requirements.txt`.
 | `app/huey_tasks.py` | The task the bot enqueues. |
 | `app/huey_consumer.py` | The worker entry point. |
 | `app/stt_processor.py` | The ONNX models, the audio decoding and the transcription. |
-| `app/llm.py` | The correction request. |
 | `app/database.py` | The SQLite schema and the queries behind `/stats`. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The three services and the shared `./data` volume. |

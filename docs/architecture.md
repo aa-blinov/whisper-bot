@@ -12,7 +12,7 @@ For what the bot does and how to run it, read the
 
 ## The shape
 
-Ten modules under `app/`. The bot side imports the worker side, and the
+Nine modules under `app/`. The bot side imports the worker side, and the
 worker side knows nothing about the bot.
 
 | Module | What it is responsible for |
@@ -25,7 +25,6 @@ worker side knows nothing about the bot.
 | `app/huey_tasks.py` | The `transcribe_task` the bot enqueues, and the deletion of the downloaded file. |
 | `app/huey_consumer.py` | The worker entry point: logging, the model warm-up, then Huey's consumer. |
 | `app/stt_processor.py` | The ONNX sessions, the audio decoding, the chunking and the transcription. |
-| `app/llm.py` | The optional correction request to OpenRouter. |
 | `app/database.py` | The SQLite schema, the migrations and the counters behind `/stats`. |
 
 ## The data flow
@@ -39,7 +38,7 @@ voice message or video note
        -> mono float32 at 16 kHz
        -> GigaAM v3 e2e CTC, 25 s chunks, quietest-frame cuts
   -> Redis: the result
-  -> app/bot.py: app/llm.py (optional) -> OpenRouter -> the reply in the chat
+  -> app/bot.py: the reply in the chat
 ```
 
 The bot writes the file into `data/` and the worker deletes that exact path
@@ -47,14 +46,13 @@ after the transcription. The bot waits for the result with `aget_result` and
 edits one status message while it waits; the wait is capped by
 `asyncio.wait_for`, from 60 seconds upward depending on the recording.
 
-The correction is a single request to
-`https://openrouter.ai/api/v1/chat/completions` with `temperature=0.1`,
-`max_tokens=2048` and a timeout of 20 seconds. Any failure returns `None`,
-and the caller keeps the recogniser's text.
-
 The history is written after the reply is sent, one row per finished
 transcription: the timestamp, the wall-clock duration, the kind of media, the
 language and the text.
+
+Nothing leaves the host. There is no correction call and no second model
+between the recogniser and the chat: the text the worker returns is the text
+the person reads.
 
 ## Decisions worth knowing about
 
@@ -62,7 +60,7 @@ language and the text.
 
 GigaAM v3 e2e is trained to emit sentence text: full stops, commas and
 capital letters come out of the decoder, not out of a second model. That is
-why the correction step is optional rather than load-bearing, and why the
+why there is no punctuation step and no "fix the text" call, and why the
 Russian path needs exactly one ONNX session.
 
 The cost is that the Russian path is Russian-only. English goes through
@@ -137,7 +135,8 @@ underscore in the recognised text made Telegram reject the message.
 - **`app/bot.py` and `app/admin.py` import `telegram`.** The worker side
   (`huey_tasks.py`, `stt_processor.py`) has no Telegram dependency at all.
 - **Only `app/database.py` writes SQL.** No other module opens a connection.
-- **Only `app/llm.py` talks to OpenRouter.**
+- **Nothing talks to a third party.** There is no HTTP client in the code
+  besides the one Telegram library brings.
 - **Only `app/config.py` reads the environment.** Every other module imports
   `settings`.
 - **The worker never touches the database.** It returns the text and the

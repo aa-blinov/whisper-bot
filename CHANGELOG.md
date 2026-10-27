@@ -13,7 +13,21 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ## [Unreleased]
 
+### Removed
+
+- **The OpenRouter correction layer is gone.** The recogniser writes finished
+  text, so the extra request only added a third party, a timeout and a second
+  thing that could fail without the person noticing. `app/llm.py`,
+  `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME` and the `httpx` pin are
+  removed; the transcript now goes from the worker straight to the chat and
+  to SQLite. If a correction ever comes back, it comes back as a product
+  decision, not as a config flag.
+
 ### Changed
+
+- **The replies read like a person wrote them.** All user-facing Russian text
+  was rewritten: no long dashes, second person throughout, short lines, and
+  the button labels are taken from the same constants the handlers match.
 
 - **The recogniser is GigaAM v3 e2e CTC on ONNX Runtime**, and it writes the
   punctuation itself. The transcript now arrives with full stops, commas and

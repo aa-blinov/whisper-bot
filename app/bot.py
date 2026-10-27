@@ -4,8 +4,8 @@
 """Telegram-бот: голосовые сообщения и видео-кружки превращаются в текст.
 
 Бот принимает медиа, складывает файл в `data/`, отправляет задачу в Huey и
-ждёт результат от воркера. Распознавание — GigaAM v3 (ONNX) с готовой
-пунктуацией.
+ждёт результат от воркера. Распознавание делает GigaAM v3 (ONNX), текст
+приходит с готовой пунктуацией.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ from huey.contrib.asyncio import aget_result
 import admin
 import database
 import keyboards
-import llm
 from config import settings
 from huey_tasks import transcribe_task
 
@@ -44,16 +43,16 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 MAX_MESSAGE_CHARS = 3_800
-# Сколько ждать воркер: запись длиннее — дольше распознавание, но не бесконечно.
+# Сколько ждать воркер: запись длиннее, значит и распознавание дольше, но не вечно.
 RESULT_TIMEOUT_MIN = 60
 RESULT_TIMEOUT_MAX = 900
 
 START_TEXT = (
     "Привет, {name}!\n\n"
-    "Пришлите голосовое сообщение или видео-кружок — верну текст. "
-    "Речь распознаётся с пунктуацией и заглавными буквами, модель работает на этом же сервере."
+    "Пришли голосовое сообщение или видео-кружок, я верну текст. "
+    "Речь распознаётся вместе с пунктуацией, модель работает на этом же сервере."
 )
-ADMIN_HINT = "\n\nВы администратор: /admin — управление доступом и статистика."
+ADMIN_HINT = "\n\nТы администратор. Команда /admin открывает доступы, список людей и статистику."
 
 
 def db_path() -> str:
@@ -78,17 +77,17 @@ async def _ensure_profile(update: Update) -> None:
 
 
 async def _deny_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отказ + заявка администратору, одним сообщением пользователю."""
+    """Отказ и заявка администратору, одним сообщением пользователю."""
     sent = await admin.access_request(update, context)
     if update.effective_user and database.is_user_allowed(db_path(), update.effective_user.id):
         await start(update, context)
         return
     if update.effective_message:
         await update.effective_message.reply_text(
-            "Пока нет доступа к боту. Я отправил заявку администратору — "
-            "как только он её подтвердит, можно присылать голосовые."
+            "Пока нет доступа. Я отправил заявку администратору, и как только он её "
+            "подтвердит, можно присылать голосовые."
             if sent
-            else "Пока нет доступа к боту. Напишите администратору."
+            else "Пока нет доступа. Напиши администратору."
         )
 
 
@@ -117,23 +116,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     lines = [
         "<b>Что умеет бот</b>",
-        "• голосовое сообщение → текст",
-        "• видео-кружок → текст",
-        "• текст приходит с пунктуацией и заглавными буквами",
+        "• голосовое сообщение становится текстом",
+        "• видео-кружок тоже",
+        "• в тексте есть пунктуация и заглавные буквы",
         "",
-        "Команды:",
-        "/language — язык распознавания (русский или английский)",
-        "/help — эта справка",
+        "<b>Команды</b>",
+        "/language: русский или английский",
+        "/help: эта справка",
     ]
     if _is_admin(update.effective_user.id if update.effective_user else None):
         lines += [
             "",
             "<b>Администратору</b>",
-            "/admin — панель: доступ, список, статистика",
-            "/add_user — добавить человека",
-            "/users — список допущенных",
-            "/invite — ссылка-приглашение",
-            "/stats — статистика",
+            "/admin: доступы, список людей и статистика",
+            "/add_user: добавить человека",
+            "/users: список допущенных",
+            "/invite: ссылка для приглашения",
+            "/stats: статистика",
         ]
     await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
@@ -144,7 +143,7 @@ async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     current = database.get_language(db_path(), user.id)
     await update.effective_message.reply_text(
-        "Выберите язык распознавания:",
+        "Выбери язык распознавания:",
         reply_markup=keyboards.language_menu(current),
     )
 
@@ -167,8 +166,8 @@ async def language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     database.set_language(db_path(), user.id, language)
     name = keyboards.LANGUAGE_NAMES[language]
     note = (
-        "\n\nАнглийский распознаёт вторая модель — первый запрос на нём "
-        "загружает её и потому идёт дольше."
+        "\n\nАнглийскую речь распознаёт вторая модель, поэтому первый такой "
+        "запрос идёт дольше."
         if language == "en"
         else ""
     )
@@ -200,7 +199,7 @@ def _split_text(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
 
 
 async def _send_transcript(message, text: str, is_admin: bool) -> None:
-    """Отправить расшифровку (возможно, несколькими сообщениями)."""
+    """Отправить расшифровку, при длинном тексте несколькими сообщениями."""
     chunks = _split_text(text)
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
@@ -217,7 +216,7 @@ def _result_timeout(duration: int) -> int:
 
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Голосовое сообщение или видео-кружок → текст."""
+    """Голосовое сообщение или видео-кружок превращаются в текст."""
     message = update.effective_message
     user = update.effective_user
     if message is None or user is None:
@@ -237,8 +236,8 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     duration = int(getattr(media, "duration", 0) or 0)
     if duration > settings.max_media_seconds:
         await message.reply_text(
-            f"Слишком длинная запись: {duration} с. Максимум — "
-            f"{settings.max_media_seconds} с."
+            f"Запись длится {duration} с, а максимум {settings.max_media_seconds}. "
+            "Пришли покороче."
         )
         return
 
@@ -252,7 +251,7 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         telegram_file = await media.get_file()
         await telegram_file.download_to_drive(file_path)
-        await status.edit_text("🧠 Распознаю речь…")
+        await status.edit_text("🧠 Распознаю…")
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         task = transcribe_task(file_path, file_type, language)
@@ -263,26 +262,18 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
         except asyncio.TimeoutError:
             logger.error("Воркер не ответил за отведённое время (%s с)", duration)
-            await status.edit_text(
-                "Распознавание заняло слишком много времени. Попробуйте ещё раз позже."
-            )
+            await status.edit_text("Распознавание затянулось. Попробуй ещё раз чуть позже.")
             return
 
         if not isinstance(result, (list, tuple)) or not result or not result[0]:
             await status.edit_text(
-                "Не удалось распознать текст. Возможно, запись слишком короткая или тихая."
+                "Не расслышал текст. Запись слишком короткая или тихая?"
             )
             return
 
         text = result[0]
         if len(result) > 1 and result[1]:
             language = result[1]
-
-        if settings.llm_enabled:
-            await status.edit_text("✍️ Правлю распознанный текст…")
-            corrected = await llm.correct_text(text)
-            if corrected:
-                text = corrected
 
         elapsed = time.time() - started
         try:
@@ -299,11 +290,11 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         logger.exception("Ошибка обработки медиа пользователя %s", user.id)
         try:
-            await status.edit_text("Внутренняя ошибка при обработке. Попробуйте ещё раз.")
+            await status.edit_text("Что-то сломалось при обработке. Попробуй ещё раз.")
         except Exception:
             pass
     finally:
-        # Воркер удаляет файл сам; здесь — страховка, если задача не дошла.
+        # Воркер удаляет файл сам; здесь страховка, если задача не дошла.
         if os.path.exists(file_path):
             try:
                 os.remove(file_path)
@@ -316,7 +307,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     user = update.effective_user
     await update.effective_message.reply_text(
-        "Ок, вернулся в меню.",
+        "Хорошо, вернулся в меню.",
         reply_markup=keyboards.main_menu(_is_admin(user.id if user else None)),
     )
 
@@ -326,8 +317,8 @@ async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None:
         return
     await update.effective_message.reply_text(
-        "Пришлите голосовое сообщение или видео-кружок — превращу его в текст.\n"
-        "Список команд: /help",
+        "Пришли голосовое сообщение или видео-кружок, я превращу его в текст.\n"
+        "Все команды: /help",
         reply_markup=keyboards.main_menu(
             _is_admin(update.effective_user.id if update.effective_user else None)
         ),
@@ -339,7 +330,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(update, Update) and update.effective_message:
         try:
             await update.effective_message.reply_text(
-                "Что-то пошло не так. Попробуйте ещё раз или напишите позже."
+                "Что-то пошло не так. Попробуй ещё раз или напиши позже."
             )
         except Exception:
             pass
@@ -404,7 +395,7 @@ def build_application() -> Application:
 
 def main() -> int:
     if not settings.token:
-        logger.error("TELEGRAM_BOT_TOKEN не задан — бот не может стартовать.")
+        logger.error("TELEGRAM_BOT_TOKEN не задан, бот не может стартовать.")
         return 1
 
     os.makedirs(settings.data_dir, exist_ok=True)
@@ -412,7 +403,7 @@ def main() -> int:
     if not settings.admin_ids and not database.has_admins(db_path()):
         logger.warning(
             "ADMIN_ID не задан: администратором станет первый, кто напишет /start. "
-            "Укажите ADMIN_ID в .env, чтобы закрепить админа."
+            "Укажи ADMIN_ID в .env, чтобы закрепить админа."
         )
 
     application = build_application()

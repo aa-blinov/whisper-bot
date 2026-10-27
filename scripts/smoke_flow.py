@@ -21,6 +21,8 @@ from contextlib import ExitStack
 
 os.environ["DB_PATH"] = "data/smoke.db"
 os.environ["DATA_DIR"] = "data"
+# Проверяем сценарий «админа ещё нет»: первый /start забирает роль.
+os.environ["ADMIN_ID"] = ""
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:SMOKE-TEST-TOKEN")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -179,7 +181,7 @@ async def run() -> None:
         print("2. /admin")
         sent.clear()
         await process({"message": base_message(ADMIN_ID, 2, text="/admin")})
-        check(any("Панель администратора" in text for text in texts()), "панель отправлена")
+        check(any("Админ-панель" in text for text in texts()), "панель отправлена")
         check(
             any(isinstance(markup, InlineKeyboardMarkup) for markup in markups()),
             "панель с inline-кнопками",

@@ -1,10 +1,10 @@
 """Администрирование доступа: панель, добавление, удаление, статистика.
 
 Добавить человека можно тремя способами, и все три ведут к одной карточке
-с кнопкой подтверждения: цифровой ID, `@username` или пересланное
-сообщение (тогда ID и имя берутся из профиля отправителя). Человек, который
-впервые написал боту, присылает заявку: админу приходит карточка с
-кнопками «Разрешить» и «Отклонить».
+с кнопкой подтверждения: номер, `@username` или пересланное сообщение, из
+которого берутся номер и имя. Человек, который впервые написал боту,
+присылает заявку: админу приходит карточка с кнопками «Разрешить» и
+«Отклонить».
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def db_path(context: ContextTypes.DEFAULT_TYPE) -> str:
 
 
 def is_admin(user_id: int | None) -> bool:
-    """Админ — тот, кто в `ADMIN_ID` или помечен админом в базе."""
+    """Админом считается тот, кто указан в `ADMIN_ID` или помечен в базе."""
     if user_id is None:
         return False
     if user_id in settings.admin_ids:
@@ -87,7 +87,7 @@ async def _say_not_admin(update: Update) -> None:
         await _answer(update.callback_query, "Это только для администратора", alert=True)
         return
     if update.effective_message:
-        await update.effective_message.reply_text("Эта команда доступна только администратору.")
+        await update.effective_message.reply_text("Команда доступна только администратору.")
 
 
 def _deny(update: Update) -> bool:
@@ -103,9 +103,9 @@ def _menu_for(user_id: int | None) -> keyboards.ReplyKeyboardMarkup:
 def _panel_text(context: ContextTypes.DEFAULT_TYPE) -> str:
     total = database.count_users(db_path(context))
     return (
-        "⚙️ <b>Панель администратора</b>\n\n"
-        f"Допущено пользователей: <b>{total}</b>\n"
-        "Выберите действие кнопкой ниже или отправьте /add_user."
+        "⚙️ <b>Админ-панель</b>\n\n"
+        f"Допущено людей: <b>{total}</b>\n"
+        "Выбери действие кнопкой ниже или отправь /add_user."
     )
 
 
@@ -130,10 +130,10 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if message is None:
         return
-    # Ответную клавиатуру показываем один раз за сессию: дальше всё
+    # Ответную клавиатуру показываем один раз за сессию, дальше всё
     # делается inline-кнопками, чтобы не дублировать меню.
     if not context.user_data.get("admin_menu_sent"):
-        await message.reply_text("Меню администратора — внизу.", reply_markup=_menu_for(user_id))
+        await message.reply_text("Меню админа внизу.", reply_markup=_menu_for(user_id))
         context.user_data["admin_menu_sent"] = True
     await message.reply_text(
         _panel_text(context),
@@ -143,12 +143,13 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _users_text(users: list[dict]) -> str:
-    lines = [f"👥 <b>Допущенные пользователи</b> — {len(users)}\n"]
+    lines = [f"👥 <b>Допущенные люди</b>, {len(users)}"]
     for user in users:
         crown = "👑" if user.get("is_admin") else "•"
         name = html.escape(keyboards.display_name(user))
-        lines.append(f"{crown} {name} — <code>{user['user_id']}</code>")
-    lines.append("\nНажмите на имя, чтобы открыть карточку и убрать доступ.")
+        lines.append(f"{crown} {name}, <code>{user['user_id']}</code>")
+    lines.append("")
+    lines.append("Нажми на имя, чтобы открыть карточку.")
     return "\n".join(lines)
 
 
@@ -157,7 +158,7 @@ async def show_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _say_not_admin(update)
         return
     users = database.get_all_users(db_path(context))
-    text = _users_text(users) if users else "Список пуст: никто ещё не добавлен."
+    text = _users_text(users) if users else "Пока никого нет. Добавь первого кнопкой «➕ Добавить»."
     markup = keyboards.users_list(users) if users else keyboards.back_home()
 
     if update.callback_query:
@@ -182,7 +183,7 @@ async def user_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = int(query.data.split(":")[1])
     user = database.get_user(db_path(context), user_id)
     if not user:
-        await _answer(query, "Пользователя уже нет в списке", alert=True)
+        await _answer(query, "Такого человека уже нет в списке", alert=True)
         await show_users(update, context)
         return
 
@@ -215,15 +216,15 @@ async def user_confirm_remove(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_id = int(query.data.split(":")[1])
     user = database.get_user(db_path(context), user_id)
     if not user:
-        await _answer(query, "Пользователя уже нет", alert=True)
+        await _answer(query, "Такого человека уже нет", alert=True)
         return
     if user_id in settings.admin_ids:
-        await _answer(query, "Администратора из .env убрать нельзя", alert=True)
+        await _answer(query, "Этого админа задаёт .env, здесь его не убрать", alert=True)
         return
 
     await _answer(query)
     await query.edit_message_text(
-        f"Убрать доступ у <b>{html.escape(keyboards.display_name(user))}</b>?",
+        f"Закрыть доступ для <b>{html.escape(keyboards.display_name(user))}</b>?",
         parse_mode=ParseMode.HTML,
         reply_markup=keyboards.confirm_remove(user),
     )
@@ -240,27 +241,27 @@ async def user_remove(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = int(query.data.split(":")[1])
     user = database.get_user(db_path(context), user_id) or {"user_id": user_id}
     removed = database.remove_user(db_path(context), user_id)
-    await _answer(query, "Доступ убран" if removed else "Такого пользователя нет")
+    await _answer(query, "Доступ закрыт" if removed else "Такого человека нет")
 
     try:
         await context.bot.send_message(
             chat_id=user_id,
-            text="Доступ к боту отозван администратором. Если это ошибка — напишите администратору.",
+            text="Администратор закрыл доступ к боту. Если это ошибка, напиши ему.",
         )
     except Exception as exc:
-        logger.info("Не удалось уведомить %s об отзыве доступа: %s", user_id, exc)
+        logger.info("Не удалось уведомить %s о закрытии доступа: %s", user_id, exc)
 
     users = database.get_all_users(db_path(context))
     await query.edit_message_text(
-        _users_text(users) if users else "Список пуст: никто ещё не добавлен.",
+        _users_text(users) if users else "Пока никого нет. Добавь первого кнопкой «➕ Добавить».",
         parse_mode=ParseMode.HTML,
         reply_markup=keyboards.users_list(users) if users else keyboards.back_home(),
     )
-    logger.info("Админ убрал доступ у %s (%s)", user_id, keyboards.display_name(user))
+    logger.info("Админ закрыл доступ %s (%s)", user_id, keyboards.display_name(user))
 
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Начало добавления: просим ID, @username или пересланное сообщение."""
+    """Начало добавления: просим номер, @username или пересланное сообщение."""
     if _deny(update):
         await _say_not_admin(update)
         return ConversationHandler.END
@@ -268,11 +269,11 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["admin_action"] = "add"
     text = (
         "➕ <b>Кого добавить?</b>\n\n"
-        "Пришлите одно из трёх:\n"
-        "• числовой Telegram ID — <code>123456789</code>\n"
-        "• имя пользователя — <code>@username</code>\n"
-        "• <b>перешлите</b> любое сообщение этого человека\n\n"
-        "Отменить — /cancel или кнопка ниже."
+        "Пришли одно из трёх:\n"
+        "• номер, например <code>123456789</code>\n"
+        "• имя пользователя, например <code>@someone</code>\n"
+        "• пересланное сообщение этого человека\n\n"
+        "Передумал? /cancel"
     )
     if update.callback_query:
         await _answer(update.callback_query)
@@ -324,7 +325,7 @@ async def add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     text = (message.text or "").strip()
     if text in (keyboards.BTN_CANCEL, "/cancel"):
         await message.reply_text(
-            "Добавление отменено.", reply_markup=_menu_for(update.effective_user.id)
+            "Никого не добавил.", reply_markup=_menu_for(update.effective_user.id)
         )
         return ConversationHandler.END
 
@@ -348,8 +349,7 @@ async def add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     if candidate is None:
         await message.reply_text(
-            "Не понял, кого добавить. Пришлите числовой ID, @username или "
-            "перешлите сообщение этого человека.",
+            "Не понял, кого добавить. Нужен номер, @username или пересланное сообщение.",
             reply_markup=keyboards.cancel_menu(),
         )
         return WAITING_USER
@@ -410,8 +410,8 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await context.bot.send_message(
             chat_id=user_id,
             text=(
-                "🎉 Вам выдали доступ к боту.\n\n"
-                "Пришлите голосовое сообщение или видео-кружок — верну текст с пунктуацией."
+                "🎉 Тебе открыли доступ.\n\n"
+                "Пришли голосовое сообщение или видео-кружок, я верну текст с пунктуацией."
             ),
             reply_markup=keyboards.user_menu(),
         )
@@ -420,8 +420,8 @@ async def add_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await context.bot.send_message(
             chat_id=query.from_user.id,
             text=(
-                "Доступ выдан, но написать человеку не получилось: "
-                "он ещё не начинал диалог с ботом. Пусть нажмёт /start."
+                "Доступ выдан, но написать человеку не вышло: он ещё не начинал "
+                "диалог с ботом. Попроси его нажать /start."
             ),
         )
     logger.info("Админ выдал доступ %s (%s)", user_id, name)
@@ -433,12 +433,12 @@ async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _say_not_admin(update)
         return
     username = context.bot.username
-    link = f"https://t.me/{username}" if username else "ссылку не удалось получить"
+    link = f"https://t.me/{username}" if username else "ссылку получить не вышло"
     text = (
-        "🔗 <b>Ссылка-приглашение</b>\n\n"
+        "🔗 <b>Ссылка для приглашения</b>\n\n"
         f"<code>{html.escape(link)}</code>\n\n"
-        "Перешлите её человеку. Когда он нажмёт /start, вам придёт заявка "
-        "с кнопками «Разрешить» и «Отклонить» — доступ выдаётся одним нажатием."
+        "Перешли её человеку. Когда он нажмёт /start, тебе придёт заявка с "
+        "кнопками «Разрешить» и «Отклонить»."
     )
     if update.callback_query:
         await _answer(update.callback_query)
@@ -457,15 +457,15 @@ def _stats_text(context: ContextTypes.DEFAULT_TYPE) -> str:
     today = datetime.now().strftime("%d.%m.%Y")
     return (
         "📊 <b>Статистика</b>\n\n"
-        f"👥 Пользователей: <b>{stats['total_users']}</b>\n\n"
-        f"📅 Сегодня ({today}):\n"
-        f"   • активных: {stats['today_active']}\n"
-        f"   • запросов: {stats['today_requests']}\n"
-        f"   • новых: {stats['today_new']}\n\n"
-        "📈 За 7 дней:\n"
-        f"   • активных: {stats['week_active']}\n"
-        f"   • запросов: {stats['week_requests']}\n"
-        f"   • новых: {stats['week_new']}\n\n"
+        f"👥 Людей: <b>{stats['total_users']}</b>\n\n"
+        f"Сегодня, {today}:\n"
+        f"• активных: {stats['today_active']}\n"
+        f"• запросов: {stats['today_requests']}\n"
+        f"• новых: {stats['today_new']}\n\n"
+        "За 7 дней:\n"
+        f"• активных: {stats['week_active']}\n"
+        f"• запросов: {stats['week_requests']}\n"
+        f"• новых: {stats['week_new']}\n\n"
         f"🧠 Модель: {html.escape(options.asr_model)} "
         f"({html.escape(options.asr_quantization or 'fp32')}, ONNX)"
     )
@@ -503,7 +503,7 @@ async def access_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             last_name=user.last_name or "",
             username=user.username or "",
         )
-        logger.warning("ADMIN_ID не задан: администратором стал первый написавший — %s", user.id)
+        logger.warning("ADMIN_ID не задан: администратором стал первый написавший, %s", user.id)
         return False
 
     name = html.escape(user.full_name or str(user.id))
@@ -551,7 +551,7 @@ async def access_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 chat_id=user_id,
                 text=(
                     "🎉 Доступ открыт!\n\n"
-                    "Пришлите голосовое сообщение или видео-кружок — верну текст с пунктуацией."
+                    "Пришли голосовое сообщение или видео-кружок, я верну текст с пунктуацией."
                 ),
                 reply_markup=keyboards.user_menu(),
             )
@@ -560,11 +560,11 @@ async def access_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await _answer(query, "Отклонено")
         await query.edit_message_text(
-            f"🚫 Заявка <code>{user_id}</code> отклонена.", parse_mode=ParseMode.HTML
+            f"🚫 Заявке <code>{user_id}</code> отказано.", parse_mode=ParseMode.HTML
         )
         try:
             await context.bot.send_message(
-                chat_id=user_id, text="К сожалению, доступ к боту не предоставлен."
+                chat_id=user_id, text="К сожалению, доступ к боту не открыли."
             )
         except Exception:
             pass

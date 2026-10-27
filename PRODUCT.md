@@ -88,9 +88,8 @@ Confirmed by the code:
   `data/hf`.
 - The bot keeps answering while the transcription runs, because the work is
   on a Huey queue and the bot waits for the result.
-- The transcript can be corrected by a model on OpenRouter, with
-  `temperature=0.1`, `max_tokens=2048` and a timeout of 20 seconds. Without
-  a key the raw text is returned.
+- Nothing leaves the host. There is no correction by a language model and no
+  cloud call: the transcript goes from the worker to the chat and to SQLite.
 - Every finished transcription is stored with its timestamp, its wall-clock
   duration, the kind of media, the language and the text.
 - The allowed people and the request history live in SQLite at `DB_PATH`.
@@ -139,8 +138,6 @@ repository.
   conversations.
 - `app/stt_processor.py` holds the ONNX sessions, the audio decoding and the
   transcription.
-- `app/llm.py` holds the correction prompt, the address of the API and the
-  request.
 - `app/database.py` holds the schema, the migrations and the counters behind
   `/stats`.
 - `requirements.txt` pins every dependency, and the Dockerfile installs
@@ -168,9 +165,9 @@ time.
    is a bug.
 3. **Access is a list, and the administrator owns it.** A Telegram id is
    either in the database or the bot does nothing for that person.
-4. **The raw transcript is always kept, and the correction is optional.** The
-   correction can fail, time out or be switched off, and the transcript is
-   already in the history when it does.
+4. **The transcript is the model's text, untouched.** Nothing rewrites it on
+   the way out and nothing is sent to a third party to improve it. What the
+   recogniser heard is what the person reads and what the history keeps.
 5. **A failure is said out loud.** The queue failed, the text could not be
    recognised, an internal error happened. Each says so in the chat.
 
