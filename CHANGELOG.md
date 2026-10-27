@@ -25,6 +25,15 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Changed
 
+- **The code is split into layers.** `app/domain.py` holds the dataclasses,
+  `app/services` the rules (access, transcription, stats), `app/infra` SQLite,
+  ONNX, files and the queue, and `app/bot` the Telegram side with the texts,
+  the keyboards and one handler module per topic. Imports point one way, and
+  `app/main.py` is the composition root next to `app/worker/consumer.py`.
+  Entry points are `python -m app.main` and `python -m app.worker.consumer`.
+- **The bot has a face.** The avatar is the Lazy to Text icon, the name is
+  "Lazy to Text", and the description and short description are set from the
+  profile: what the bot does and that the audio stays on its own server.
 - **The replies read like a person wrote them.** All user-facing Russian text
   was rewritten: no long dashes, second person throughout, short lines, and
   the button labels are taken from the same constants the handlers match.

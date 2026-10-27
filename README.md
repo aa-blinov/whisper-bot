@@ -44,6 +44,13 @@ language, Russian or English, from the keyboard.
 the administrator, and the log records it. Set it to pin the administrator
 explicitly; several ids can be separated by commas.
 
+The bot's name, description and avatar are set by the bot itself at start:
+`Lazy to Text`, the description and the short description from
+`app/bot/app.py`, and `app/assets/bot_avatar.png` as the picture (the same
+icon the Lazy to Text desktop app uses). The avatar is uploaded only when the
+profile has none; set `BOT_PROFILE_FORCE=1` to re-upload it after replacing
+the file.
+
 ## What it does
 
 - **Transcribes voice messages and video notes.** A voice message and a round
@@ -88,13 +95,13 @@ The `/invite` command gives the `https://t.me/<bot>` link to forward.
 
 ```
 voice message or video note
-  -> app/bot.py: download to data/<uuid hex>_<type>.bin
+  -> app/bot/handlers/media.py: download to data/<uuid hex>_<type>.bin
   -> Redis: Huey task transcribe_task(path, type, language)
-  -> app/huey_tasks.py: stt_processor.transcribe_media_sync
+  -> app/infra/queue.py -> app/infra/asr.py
        soundfile or ffmpeg -> 16 kHz mono float32
        GigaAM v3 e2e CTC (ONNX) on the CPU, 25 s chunks
   -> Redis: the result
-  -> app/bot.py: the reply in the chat
+  -> app/bot/handlers/media.py: the reply in the chat
 ```
 
 The bot and the worker are separate containers, and they meet twice: in the
@@ -161,29 +168,32 @@ Without Docker:
 
 ```bash
 pip install --no-cache-dir -r requirements.txt
-python app/bot.py
-python app/huey_consumer.py
+python -m app.main
+python -m app.worker.consumer
 ```
 
-The modules import each other by their top-level names, so `app/` has to be
-the directory the script is started from. `app/tasks.py` connects to
+The package is imported as `app`, so the commands run from the repository
+root (or from `/app` inside the container). `app/infra/queue.py` connects to
 `REDIS_HOST` (default `redis`), so a run outside Compose needs that name to
 resolve or an override in the environment. ffmpeg has to be on the path.
 
 The repository has no test command. `tests/test_bot.py` is empty, and no test
-runner is in `requirements.txt`.
+runner is in `requirements.txt`. `scripts/smoke_flow.py` is the end-to-end
+check that is actually run: it feeds real updates through the application
+with the Telegram calls mocked and a real worker behind the queue.
 
 | Path | What it holds |
 | --- | --- |
-| `app/bot.py` | The Telegram handlers, the media pipeline and the replies. |
-| `app/admin.py` | The admin panel, access requests and the add/remove conversations. |
-| `app/keyboards.py` | Buttons and keyboards. |
-| `app/config.py` | The settings object. |
-| `app/tasks.py` | The Huey instance and the Redis connection. |
-| `app/huey_tasks.py` | The task the bot enqueues. |
-| `app/huey_consumer.py` | The worker entry point. |
-| `app/stt_processor.py` | The ONNX models, the audio decoding and the transcription. |
-| `app/database.py` | The SQLite schema and the queries behind `/stats`. |
+| `app/main.py` | The composition root: settings, the database, the polling loop. |
+| `app/container.py` | Builds the services from the settings. |
+| `app/domain.py` | `User`, `Stats`, `Transcript`. |
+| `app/bot/app.py` | Builds the application and registers the handlers. |
+| `app/bot/texts.py` | Every string a person reads. |
+| `app/bot/keyboards.py` | Buttons and keyboards. |
+| `app/bot/handlers/` | `common`, `language`, `media`, `admin`, `requests`, `guards`. |
+| `app/services/` | `access`, `transcription`, `stats`, `media`: the rules, without Telegram. |
+| `app/infra/` | `database`, `asr`, `media`, `queue`: SQLite, ONNX, files, Huey. |
+| `app/worker/consumer.py` | The worker entry point. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The three services and the shared `./data` volume. |
 | `.env.example` | The variables and their defaults. |

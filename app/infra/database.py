@@ -1,4 +1,4 @@
-"""SQLite: список допущенных пользователей и история запросов.
+"""SQLite: пользователи и история запросов.
 
 Схема создаётся и дополняется при старте, поэтому база, оставшаяся от
 старой версии, продолжает работать: недостающие колонки добавляются, а не
@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime, timedelta
+
+from app.domain import Stats, User
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,18 @@ def _add_missing_columns(conn: sqlite3.Connection, table: str, columns) -> None:
             logger.warning("Миграция %s.%s не удалась: %s", table, name, exc)
 
 
+def _row_to_user(row: sqlite3.Row) -> User:
+    return User(
+        user_id=int(row["user_id"]),
+        is_admin=bool(row["is_admin"]),
+        first_name=row["first_name"] or "",
+        last_name=row["last_name"] or "",
+        username=row["username"] or "",
+        language=row["language"] or "ru",
+        created_at=row["created_at"],
+    )
+
+
 def init_db(db_path: str, admin_ids: tuple[int, ...] = ()) -> None:
     """Создать схему, дополнить её и завести администраторов из окружения."""
     try:
@@ -80,8 +94,6 @@ def init_db(db_path: str, admin_ids: tuple[int, ...] = ()) -> None:
             conn.execute(TASKS_SCHEMA)
             _add_missing_columns(conn, "users", USER_COLUMNS)
             _add_missing_columns(conn, "tasks", TASK_COLUMNS)
-            # `created_at` появился позже: старым строкам ставим текущее время,
-            # чтобы статистика не падала на пустом значении.
             conn.execute(
                 "UPDATE users SET created_at = datetime('now') "
                 "WHERE created_at IS NULL OR created_at = ''"
@@ -108,95 +120,19 @@ def init_db(db_path: str, admin_ids: tuple[int, ...] = ()) -> None:
         logger.exception("Не удалось инициализировать базу данных: %s", exc)
 
 
-def _profile_values(first_name: str, last_name: str, username: str) -> tuple[str, str, str]:
-    return (first_name or "", last_name or "", username or "")
-
-
-def add_user(
-    db_path: str,
-    user_id: int,
-    *,
-    is_admin: bool = False,
-    first_name: str = "",
-    last_name: str = "",
-    username: str = "",
-) -> bool:
-    """Добавить или обновить пользователя. True, если запись новая."""
-    try:
-        with connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT user_id FROM users WHERE user_id = ?", (user_id,)
-            ).fetchone()
-            created = row is None
-            first_name, last_name, username = _profile_values(
-                first_name, last_name, username
-            )
-            if created:
-                conn.execute(
-                    """INSERT INTO users (user_id, is_admin, first_name, last_name, username)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, int(is_admin), first_name, last_name, username),
-                )
-            else:
-                conn.execute(
-                    """UPDATE users
-                       SET first_name = COALESCE(NULLIF(?, ''), first_name),
-                           last_name = COALESCE(NULLIF(?, ''), last_name),
-                           username = COALESCE(NULLIF(?, ''), username),
-                           is_admin = MAX(is_admin, ?)
-                       WHERE user_id = ?""",
-                    (first_name, last_name, username, int(is_admin), user_id),
-                )
-            conn.commit()
-        logger.info("Пользователь %s %s", "добавлен" if created else "обновлён", user_id)
-        return created
-    except sqlite3.Error as exc:
-        logger.error("Ошибка при добавлении пользователя %s: %s", user_id, exc)
-        return False
-
-
-def remove_user(db_path: str, user_id: int) -> bool:
-    """Удалить пользователя из списка допущенных. True, если он там был."""
-    try:
-        with connect(db_path) as conn:
-            cursor = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-            conn.commit()
-            removed = cursor.rowcount > 0
-        if removed:
-            logger.info("Пользователь %s удалён", user_id)
-        return removed
-    except sqlite3.Error as exc:
-        logger.error("Ошибка при удалении пользователя %s: %s", user_id, exc)
-        return False
-
-
-def is_user_allowed(db_path: str, user_id: int) -> bool:
-    try:
-        with connect(db_path) as conn:
-            return (
-                conn.execute(
-                    "SELECT 1 FROM users WHERE user_id = ?", (user_id,)
-                ).fetchone()
-                is not None
-            )
-    except sqlite3.Error as exc:
-        logger.error("Ошибка проверки доступа %s: %s", user_id, exc)
-        return False
-
-
-def get_user(db_path: str, user_id: int) -> dict | None:
+def get_user(db_path: str, user_id: int) -> User | None:
     try:
         with connect(db_path) as conn:
             row = conn.execute(
                 "SELECT * FROM users WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return dict(row) if row else None
+        return _row_to_user(row) if row else None
     except sqlite3.Error as exc:
         logger.error("Ошибка чтения пользователя %s: %s", user_id, exc)
         return None
 
 
-def get_all_users(db_path: str) -> list[dict]:
+def list_users(db_path: str) -> list[User]:
     """Все допущенные, администраторы первыми, затем по имени."""
     try:
         with connect(db_path) as conn:
@@ -204,7 +140,7 @@ def get_all_users(db_path: str) -> list[dict]:
                 """SELECT * FROM users
                    ORDER BY is_admin DESC, LOWER(COALESCE(first_name, '')), user_id"""
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_user(row) for row in rows]
     except sqlite3.Error as exc:
         logger.error("Ошибка чтения списка пользователей: %s", exc)
         return []
@@ -231,6 +167,66 @@ def has_admins(db_path: str) -> bool:
         return False
 
 
+def add_user(
+    db_path: str,
+    user_id: int,
+    *,
+    is_admin: bool = False,
+    first_name: str = "",
+    last_name: str = "",
+    username: str = "",
+) -> bool:
+    """Добавить или обновить пользователя. True, если запись новая."""
+    try:
+        with connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT user_id FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            created = row is None
+            first_name, last_name, username = (
+                first_name or "",
+                last_name or "",
+                username or "",
+            )
+            if created:
+                conn.execute(
+                    """INSERT INTO users (user_id, is_admin, first_name, last_name, username)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (user_id, int(is_admin), first_name, last_name, username),
+                )
+            else:
+                conn.execute(
+                    """UPDATE users
+                       SET first_name = COALESCE(NULLIF(?, ''), first_name),
+                           last_name = COALESCE(NULLIF(?, ''), last_name),
+                           username = COALESCE(NULLIF(?, ''), username),
+                           is_admin = MAX(is_admin, ?)
+                       WHERE user_id = ?""",
+                    (first_name, last_name, username, int(is_admin), user_id),
+                )
+            conn.commit()
+        logger.info("Пользователь %s %s", "добавлен" if created else "обновлён", user_id)
+        return created
+    except sqlite3.Error as exc:
+        logger.error("Ошибка при добавлении пользователя %s: %s", user_id, exc)
+        return False
+
+
+def remove_user(db_path: str, user_id: int) -> bool:
+    """Убрать пользователя из списка. True, если он там был."""
+    try:
+        with connect(db_path) as conn:
+            cursor = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+            conn.commit()
+            removed = cursor.rowcount > 0
+        if removed:
+            logger.info("Пользователь %s удалён", user_id)
+        return removed
+    except sqlite3.Error as exc:
+        logger.error("Ошибка при удалении пользователя %s: %s", user_id, exc)
+        return False
+
+
 def set_language(db_path: str, user_id: int, language: str) -> None:
     """Запомнить выбранный язык, чтобы он переживал перезапуск бота."""
     try:
@@ -243,36 +239,12 @@ def set_language(db_path: str, user_id: int, language: str) -> None:
         logger.error("Ошибка сохранения языка %s: %s", user_id, exc)
 
 
-def get_language(db_path: str, user_id: int, default: str = "ru") -> str:
-    try:
-        with connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT language FROM users WHERE user_id = ?", (user_id,)
-            ).fetchone()
-        return (row["language"] if row else None) or default
-    except sqlite3.Error:
-        return default
-
-
-def touch_profile(
-    db_path: str, user_id: int, first_name: str, last_name: str, username: str
-) -> None:
-    """Обновить имя и username, если человек сменил их в Telegram."""
-    add_user(
-        db_path,
-        user_id,
-        first_name=first_name,
-        last_name=last_name,
-        username=username,
-    )
-
-
-def record_task_metadata(
+def record_task(
     db_path: str,
     user_id: int,
     duration_seconds: float,
-    original_file_type: str,
-    recognized_text: str,
+    file_type: str,
+    text: str,
     language: str | None = None,
 ) -> None:
     try:
@@ -286,8 +258,8 @@ def record_task_metadata(
                     user_id,
                     datetime.now().isoformat(timespec="seconds"),
                     duration_seconds,
-                    original_file_type,
-                    recognized_text,
+                    file_type,
+                    text,
                     language,
                 ),
             )
@@ -296,17 +268,8 @@ def record_task_metadata(
         logger.error("Ошибка записи запроса пользователя %s: %s", user_id, exc)
 
 
-def get_bot_stats(db_path: str) -> dict:
+def stats(db_path: str) -> Stats:
     """Счётчики для `/stats`: пользователи, запросы за сегодня и за неделю."""
-    empty = {
-        "total_users": 0,
-        "today_active": 0,
-        "today_requests": 0,
-        "today_new": 0,
-        "week_active": 0,
-        "week_requests": 0,
-        "week_new": 0,
-    }
     try:
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -316,7 +279,6 @@ def get_bot_stats(db_path: str) -> dict:
 
         with connect(db_path) as conn:
             total_users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
-
             today_active = int(
                 conn.execute(
                     "SELECT COUNT(DISTINCT user_id) FROM tasks WHERE timestamp >= ?",
@@ -333,7 +295,6 @@ def get_bot_stats(db_path: str) -> dict:
                     "SELECT COUNT(*) FROM users WHERE created_at >= ?", (today_iso,)
                 ).fetchone()[0]
             )
-
             week_active = int(
                 conn.execute(
                     "SELECT COUNT(DISTINCT user_id) FROM tasks WHERE timestamp >= ?",
@@ -351,15 +312,15 @@ def get_bot_stats(db_path: str) -> dict:
                 ).fetchone()[0]
             )
 
-        return {
-            "total_users": total_users,
-            "today_active": today_active,
-            "today_requests": today_requests,
-            "today_new": today_new,
-            "week_active": week_active,
-            "week_requests": week_requests,
-            "week_new": week_new,
-        }
+        return Stats(
+            total_users=total_users,
+            today_active=today_active,
+            today_requests=today_requests,
+            today_new=today_new,
+            week_active=week_active,
+            week_requests=week_requests,
+            week_new=week_new,
+        )
     except sqlite3.Error as exc:
         logger.error("Ошибка чтения статистики: %s", exc)
-        return empty
+        return Stats()

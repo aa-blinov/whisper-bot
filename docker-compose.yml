@@ -1,4 +1,4 @@
-services:
+﻿services:
   redis:
     image: redis:7-alpine
     container_name: whisper-redis
@@ -35,7 +35,7 @@ services:
     image: telegram-stt-bot:latest
     container_name: huey-worker
     restart: unless-stopped
-    command: ["python", "-u", "huey_consumer.py"]
+    command: ["python", "-m", "app.worker.consumer"]
     env_file:
       - .env
     environment:

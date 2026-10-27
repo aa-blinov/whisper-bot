@@ -12,33 +12,49 @@ For what the bot does and how to run it, read the
 
 ## The shape
 
-Nine modules under `app/`. The bot side imports the worker side, and the
-worker side knows nothing about the bot.
+Four layers under `app/`, and the imports only ever point one way:
 
-| Module | What it is responsible for |
+```
+bot/       Telegram: handlers, texts, keyboards          (depends on services, domain)
+services/  the rules: access, transcription, stats       (depends on infra, domain)
+infra/     SQLite, ONNX, files, Huey                     (depends on config, domain)
+domain.py  User, Stats, Transcript                       (depends on nothing)
+```
+
+`app/main.py` is the composition root: it reads `Settings`, opens the
+database, builds the `Application` and starts polling. `app/worker/consumer.py`
+is the second process: it warms the model and hands the task module to Huey.
+
+| Layer | What it is responsible for |
 | --- | --- |
-| `app/bot.py` | Handler wiring, the media pipeline, the access check, the wait for the result and the write to the history. |
-| `app/admin.py` | The panel, the access requests, and the add/remove conversations. |
-| `app/keyboards.py` | Every button label, the reply keyboards, the inline keyboards and `display_name`. |
-| `app/config.py` | One `Settings` object built from the environment. |
-| `app/tasks.py` | The Huey instance, built from `Settings`. |
-| `app/huey_tasks.py` | The `transcribe_task` the bot enqueues, and the deletion of the downloaded file. |
-| `app/huey_consumer.py` | The worker entry point: logging, the model warm-up, then Huey's consumer. |
-| `app/stt_processor.py` | The ONNX sessions, the audio decoding, the chunking and the transcription. |
-| `app/database.py` | The SQLite schema, the migrations and the counters behind `/stats`. |
+| `app/domain.py` | `User`, `Stats`, `Transcript`. Plain dataclasses, no driver, no Telegram. |
+| `app/container.py` | Builds the services from `Settings`; the only place that wires infrastructure in. |
+| `app/bot/app.py` | Builds the `Application`, registers the handlers, sets the command menu. |
+| `app/bot/handlers/` | One file per topic: `common`, `language`, `media`, `admin`, `requests`, `guards`. |
+| `app/bot/texts.py` | Every string a person reads, with the escaping. |
+| `app/bot/keyboards.py` | Button labels and keyboards. |
+| `app/bot/deps.py` | Getters for the services stored in `bot_data`. |
+| `app/services/access.py` | Allowlist, admin roles, grant and revoke, the language. |
+| `app/services/transcription.py` | Enqueue the task, wait, time out, return a `Transcript`. |
+| `app/services/stats.py` | The counters and the history row. |
+| `app/services/media.py` | Downloaded files as a service, so the bot layer stays out of `infra`. |
+| `app/infra/database.py` | The SQLite schema, the migrations and the queries. |
+| `app/infra/asr.py` | The ONNX sessions, the audio decoding, the chunking. |
+| `app/infra/media.py` | Where downloaded files go and how they are removed. |
+| `app/infra/queue.py` | The Huey instance and `transcribe_task`. |
 
 ## The data flow
 
 ```
 voice message or video note
-  -> app/bot.py: download to data/<uuid hex>_<type>.bin
-  -> Redis: transcribe_task(path, type, language)
-  -> app/huey_tasks.py: stt_processor.transcribe_media_sync
+  -> app/bot/handlers/media.py: download to data/<uuid hex>_<type>.bin
+  -> app/services/transcription.py -> Redis: transcribe_task(path, type, language)
+  -> app/infra/queue.py -> app/infra/asr.py
        soundfile (WAV/FLAC/OGG) or ffmpeg (MP4 and everything else)
        -> mono float32 at 16 kHz
        -> GigaAM v3 e2e CTC, 25 s chunks, quietest-frame cuts
   -> Redis: the result
-  -> app/bot.py: the reply in the chat
+  -> app/bot/handlers/media.py: the reply in the chat
 ```
 
 The bot writes the file into `data/` and the worker deletes that exact path
@@ -79,9 +95,9 @@ The cost is that the two containers have to meet twice: in Redis, and in the
 missing on one side, the worker never finds the file and the bot waits for a
 result that never arrives.
 
-The second cost is memory discipline: `app/huey_tasks.py` imports the model
-module inside the task, and only the worker entry point warms it up. Moving
-either import to module level puts a session in the bot process too.
+The second cost is memory discipline: `app/infra/queue.py` imports the
+recogniser inside the task, and only the worker entry point warms it up.
+Moving either import to module level puts a session in the bot process too.
 
 ### The model stays on the CPU, and it is small
 
@@ -115,9 +131,10 @@ The cost is a fan-out to every administrator on every request, and a
 
 ### The reply keyboard is matched by constants
 
-`app/keyboards.py` holds each label once, and `app/admin.py` builds its
-`filters.Regex` from the same constant with `re.escape`, anchored at both
-ends. Change a label and the handler follows it; that is the whole point.
+`app/bot/keyboards.py` holds each label once, and
+`app/bot/handlers/admin.py` builds its `filters.Regex` from the same constant
+with `re.escape`, anchored at both ends. Change a label and the handler
+follows it; that is the whole point.
 
 The older code used unanchored patterns on free text, so any message that
 contained "Добавить пользователя" opened the add-user flow. Anchoring is what
@@ -132,15 +149,19 @@ underscore in the recognised text made Telegram reject the message.
 
 ## Boundaries
 
-- **`app/bot.py` and `app/admin.py` import `telegram`.** The worker side
-  (`huey_tasks.py`, `stt_processor.py`) has no Telegram dependency at all.
-- **Only `app/database.py` writes SQL.** No other module opens a connection.
+- **Only `app/bot/` imports `telegram`.** The services, the infrastructure and
+  the worker have no Telegram dependency at all.
+- **Only `app/infra/database.py` writes SQL.** No other module opens a
+  connection, and no handler touches the database directly.
 - **Nothing talks to a third party.** There is no HTTP client in the code
   besides the one Telegram library brings.
-- **Only `app/config.py` reads the environment.** Every other module imports
-  `settings`.
+- **Only `app/config.py` reads the environment.** Everything else receives a
+  `Settings` object or a service built from it.
 - **The worker never touches the database.** It returns the text and the
   language; the bot writes the row.
-- **The modules import each other by their top-level names.** `from tasks
-  import huey`, `from stt_processor import transcribe_media_sync`, so `app/`
-  has to be the directory the script is started from.
+- **The imports point one way.** `bot` -> `services` -> `infra` -> `config`
+  and `domain`. Nothing under `services/` or `infra/` imports `app.bot`, and
+  a handler that needs data goes through a service.
+- **The package is imported as `app`.** Run `python -m app.main` and
+  `python -m app.worker.consumer` from the repository root, or from `/app`
+  in the container; there are no top-level module imports left.

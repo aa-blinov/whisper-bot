@@ -21,7 +21,7 @@ WORKDIR /app
 
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
-COPY app/ .
+COPY app/ ./app/
 
 # Кэш моделей и база живут в том же томе, что и media: ./data:/app/data.
 ENV PYTHONUNBUFFERED=1 \
@@ -31,4 +31,4 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN mkdir -p /app/data/hf && chmod -R 777 /app/data
 
-CMD ["python", "-u", "bot.py"]
+CMD ["python", "-m", "app.main"]

@@ -1,7 +1,7 @@
 """Настройки бота из переменных окружения.
 
-Один модуль читает `.env` один раз и отдаёт неизменяемый объект, чтобы
-остальные файлы не дёргали `os.getenv` и не расходились в значениях.
+Один модуль читает `.env` и отдаёт неизменяемый объект, чтобы остальные
+слои не дёргали `os.getenv` и не расходились в значениях.
 """
 
 from __future__ import annotations
@@ -64,26 +64,26 @@ class Settings:
     # Разобранный `.env` держим рядом, чтобы не перечитывать файл в тестах.
     raw: dict[str, str] = field(default_factory=dict)
 
+    @classmethod
+    def from_env(cls) -> "Settings":
+        """Собрать настройки из окружения с безопасными значениями."""
+        data_dir = os.getenv("DATA_DIR", "data").strip() or "data"
+        db_path = os.getenv("DB_PATH", "").strip() or os.path.join(
+            data_dir, "bot_database.db"
+        )
 
-def load() -> Settings:
-    """Собрать настройки из окружения (с подстановкой безопасных значений)."""
-    data_dir = os.getenv("DATA_DIR", "data").strip() or "data"
-    db_path = os.getenv("DB_PATH", "").strip() or os.path.join(data_dir, "bot_database.db")
-
-    return Settings(
-        token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() or None,
-        admin_ids=_int_list(os.getenv("ADMIN_ID")),
-        data_dir=data_dir,
-        db_path=db_path,
-        redis_host=os.getenv("REDIS_HOST", "redis").strip() or "redis",
-        redis_port=_int(os.getenv("REDIS_PORT"), 6379),
-        redis_db=_int(os.getenv("REDIS_DB"), 0),
-        asr_model=os.getenv("ASR_MODEL", "gigaam-v3-e2e-ctc").strip() or "gigaam-v3-e2e-ctc",
-        asr_model_en=os.getenv("ASR_MODEL_EN", "whisper-base").strip() or "whisper-base",
-        asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
-        asr_threads=max(1, _int(os.getenv("ASR_THREADS"), 4)),
-        max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
-    )
-
-
-settings = load()
+        return cls(
+            token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() or None,
+            admin_ids=_int_list(os.getenv("ADMIN_ID")),
+            data_dir=data_dir,
+            db_path=db_path,
+            redis_host=os.getenv("REDIS_HOST", "redis").strip() or "redis",
+            redis_port=_int(os.getenv("REDIS_PORT"), 6379),
+            redis_db=_int(os.getenv("REDIS_DB"), 0),
+            asr_model=os.getenv("ASR_MODEL", "gigaam-v3-e2e-ctc").strip()
+            or "gigaam-v3-e2e-ctc",
+            asr_model_en=os.getenv("ASR_MODEL_EN", "whisper-base").strip() or "whisper-base",
+            asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
+            asr_threads=max(1, _int(os.getenv("ASR_THREADS"), 4)),
+            max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
+        )

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from app.domain import User
+
 BTN_LANGUAGE = "🌐 Язык"
 BTN_USERS = "👥 Люди"
 BTN_STATS = "📊 Статистика"
@@ -79,15 +81,15 @@ def admin_home(count: int) -> InlineKeyboardMarkup:
     )
 
 
-def users_list(users: list[dict]) -> InlineKeyboardMarkup:
+def users_list(users: list[User]) -> InlineKeyboardMarkup:
     rows = []
     for user in users:
-        mark = "👑 " if user.get("is_admin") else "👤 "
+        mark = "👑 " if user.is_admin else "👤 "
         rows.append(
             [
                 InlineKeyboardButton(
-                    f"{mark}{display_name(user)} · {user['user_id']}",
-                    callback_data=f"user:{user['user_id']}",
+                    f"{mark}{user.display_name} · {user.user_id}",
+                    callback_data=f"user:{user.user_id}",
                 )
             ]
         )
@@ -95,20 +97,26 @@ def users_list(users: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def user_card(user: dict) -> InlineKeyboardMarkup:
-    user_id = user["user_id"]
-    rows = [[InlineKeyboardButton("🗑 Закрыть доступ", callback_data=f"user:{user_id}:del")]]
-    rows.append([InlineKeyboardButton("⬅️ К списку", callback_data="admin:list")])
+def user_card(user: User) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                "🗑 Закрыть доступ", callback_data=f"user:{user.user_id}:del"
+            )
+        ],
+        [InlineKeyboardButton("⬅️ К списку", callback_data="admin:list")],
+    ]
     return InlineKeyboardMarkup(rows)
 
 
-def confirm_remove(user: dict) -> InlineKeyboardMarkup:
-    user_id = user["user_id"]
+def confirm_remove(user: User) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("✅ Да, закрыть", callback_data=f"user:{user_id}:del:yes"),
-                InlineKeyboardButton("⬅️ Оставить", callback_data=f"user:{user_id}"),
+                InlineKeyboardButton(
+                    "✅ Да, закрыть", callback_data=f"user:{user.user_id}:del:yes"
+                ),
+                InlineKeyboardButton("⬅️ Оставить", callback_data=f"user:{user.user_id}"),
             ]
         ]
     )
@@ -123,7 +131,7 @@ def confirm_add(user_id: int, name: str) -> InlineKeyboardMarkup:
     )
 
 
-def access_request(user_id: int, name: str) -> InlineKeyboardMarkup:
+def access_request(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [
@@ -136,20 +144,3 @@ def access_request(user_id: int, name: str) -> InlineKeyboardMarkup:
 
 def back_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="admin:home")]])
-
-
-def display_name(user: dict) -> str:
-    """Имя человека для списков и карточек."""
-    if not user:
-        return "без имени"
-    full = " ".join(
-        part for part in (user.get("first_name") or "", user.get("last_name") or "") if part
-    ).strip()
-    username = user.get("username")
-    if full and username:
-        return f"{full} (@{username})"
-    if full:
-        return full
-    if username:
-        return f"@{username}"
-    return str(user.get("user_id", ""))

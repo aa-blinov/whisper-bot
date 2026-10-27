@@ -16,8 +16,8 @@ import asyncio
 import os
 import shutil
 import sys
-from unittest.mock import AsyncMock, patch
 from contextlib import ExitStack
+from unittest.mock import AsyncMock, patch
 
 os.environ["DB_PATH"] = "data/smoke.db"
 os.environ["DATA_DIR"] = "data"
@@ -29,9 +29,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from telegram import Bot, InlineKeyboardMarkup, Update, User, Voice  # noqa: E402
 
-import bot as botmod  # noqa: E402
-import database  # noqa: E402
-from config import settings  # noqa: E402
+from app.bot.app import build_application  # noqa: E402
+from app.config import Settings  # noqa: E402
+from app.container import build_services  # noqa: E402
+from app.infra import database  # noqa: E402
 
 SAMPLE = os.environ.get("SMOKE_AUDIO", "data/_test/sample.mp3")
 ADMIN_ID = 111
@@ -41,6 +42,8 @@ NEWCOMER_ID = 333
 sent: list[tuple[int | None, str, object]] = []
 edits: list[str] = []
 failures: list[str] = []
+
+settings = Settings.from_env()
 
 
 class FakeMessage:
@@ -114,8 +117,15 @@ async def run() -> None:
     if not has_audio:
         print(f"нет файла {SAMPLE}: шаг с распознаванием будет пропущен")
 
+    # Прогон должен быть повторяемым: иначе пользователи из прошлого
+    # запуска делают проверки заявки и списка ложно-красными.
+    try:
+        os.remove(settings.db_path)
+    except FileNotFoundError:
+        pass
+
     database.init_db(settings.db_path, settings.admin_ids)
-    application = botmod.build_application()
+    application = build_application(settings, build_services(settings))
     bot = application.bot
     update_id = 0
 
@@ -132,9 +142,7 @@ async def run() -> None:
 
     async def fake_get_me(self, *args, **kwargs):
         """Подмена get_me: PTB запоминает пользователя только на этом вызове."""
-        user = User(
-            id=999, is_bot=True, first_name="SmokeBot", username="smoke_bot"
-        )
+        user = User(id=999, is_bot=True, first_name="SmokeBot", username="smoke_bot")
         self._bot_user = user
         return user
 
@@ -149,6 +157,10 @@ async def run() -> None:
         ("get_chat", AsyncMock(side_effect=Exception("нет доступа к профилю"))),
         ("set_my_commands", AsyncMock(return_value=True)),
         ("set_my_short_description", AsyncMock(return_value=True)),
+        ("set_my_name", AsyncMock(return_value=True)),
+        ("set_my_description", AsyncMock(return_value=True)),
+        ("get_user_profile_photos", AsyncMock(return_value=type("P", (), {"total_count": 1})())),
+        ("set_my_profile_photo", AsyncMock(return_value=True)),
         ("get_me", fake_get_me),
     ):
         stack.enter_context(patch.object(Bot, name, new=mock))
@@ -173,8 +185,8 @@ async def run() -> None:
         # 1. Первый /start становится админом.
         print("1. /start без ADMIN_ID")
         await process({"message": base_message(ADMIN_ID, 1, text="/start")})
-        check(database.is_user_allowed(settings.db_path, ADMIN_ID), "первый пользователь допущен")
-        check(database.get_user(settings.db_path, ADMIN_ID)["is_admin"] == 1, "он администратор")
+        check(database.get_user(settings.db_path, ADMIN_ID) is not None, "первый допущен")
+        check(bool(database.get_user(settings.db_path, ADMIN_ID).is_admin), "он администратор")
         check(any("Привет" in text for text in texts()), "пришло приветствие")
 
         # 2. Панель с inline-кнопками.
@@ -198,7 +210,7 @@ async def run() -> None:
         await process({"message": base_message(ADMIN_ID, 4, text=str(GUEST_ID))})
         check(any("Добавить этого человека" in text for text in texts()), "пришла карточка")
         await process(callback_update(ADMIN_ID, f"add:{GUEST_ID}"))
-        check(database.is_user_allowed(settings.db_path, GUEST_ID), "пользователь в базе")
+        check(database.get_user(settings.db_path, GUEST_ID) is not None, "пользователь в базе")
         check(
             any(chat == GUEST_ID for chat, _, _ in sent),
             "новому пользователю отправлено приветствие",
@@ -217,7 +229,7 @@ async def run() -> None:
         print("5. Удаление доступа")
         await process(callback_update(ADMIN_ID, f"user:{GUEST_ID}:del"))
         await process(callback_update(ADMIN_ID, f"user:{GUEST_ID}:del:yes"))
-        check(not database.is_user_allowed(settings.db_path, GUEST_ID), "доступ убран")
+        check(database.get_user(settings.db_path, GUEST_ID) is None, "доступ убран")
 
         # 6. Заявка от нового человека и разрешение одним нажатием.
         print("6. Заявка на доступ")
@@ -228,7 +240,10 @@ async def run() -> None:
             "админу пришла заявка",
         )
         await process(callback_update(ADMIN_ID, f"req:{NEWCOMER_ID}:allow"))
-        check(database.is_user_allowed(settings.db_path, NEWCOMER_ID), "заявка одобрена")
+        check(
+            database.get_user(settings.db_path, NEWCOMER_ID) is not None,
+            "заявка одобрена",
+        )
 
         # 7. Язык.
         print("7. Язык распознавания")
@@ -236,7 +251,10 @@ async def run() -> None:
         await process({"message": base_message(ADMIN_ID, 30, text="/language")})
         check(any("язык" in text.lower() for text in texts()), "меню языка показано")
         await process({"message": base_message(ADMIN_ID, 31, text="🇷🇺 Русский")})
-        check(database.get_language(settings.db_path, ADMIN_ID) == "ru", "язык сохранён в базе")
+        check(
+            database.get_user(settings.db_path, ADMIN_ID).language == "ru",
+            "язык сохранён в базе",
+        )
 
         # 8. Голосовое сообщение: скачивание подменено, распознавание настоящее.
         print("8. Голосовое сообщение → текст (настоящий воркер)")
@@ -264,7 +282,7 @@ async def run() -> None:
                 check("Привет" in body, "текст распознан")
                 check("." in body and "," in body, "пунктуация на месте")
             check(
-                database.get_bot_stats(settings.db_path)["today_requests"] >= 1,
+                database.stats(settings.db_path).today_requests >= 1,
                 "запрос записан в историю",
             )
         else:

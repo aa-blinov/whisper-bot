@@ -126,20 +126,22 @@ not congratulate anybody.
 they are read by whoever finds the link to the repository, and the two are
 not meant to match word for word.
 
-**Assets:** there are none. No logo, no icon, no screenshot of a
-conversation, no domain name. The product takes its name from the
-repository.
+**Assets:** the bot avatar is the Lazy to Text icon (a teal microphone on a
+cream rounded square), and the profile text lives in the BotFather fields set
+by the code. There is no logo file in the repository and no screenshot of a
+conversation.
 
 ## Evidence on Hand
 
 - `README.md` describes the flow, the dependencies and the deployment.
-- `app/bot.py` holds the handlers, the media pipeline and every reply.
-- `app/admin.py` holds the panel, the access requests and the add/remove
-  conversations.
-- `app/stt_processor.py` holds the ONNX sessions, the audio decoding and the
+- `app/bot/handlers/media.py` holds the voice and video-note pipeline.
+- `app/bot/handlers/admin.py` holds the panel, the access requests and the
+  add/remove conversations.
+- `app/bot/texts.py` holds every string a person reads.
+- `app/infra/asr.py` holds the ONNX sessions, the audio decoding and the
   transcription.
-- `app/database.py` holds the schema, the migrations and the counters behind
-  `/stats`.
+- `app/infra/database.py` holds the schema, the migrations and the counters
+  behind `/stats`.
 - `requirements.txt` pins every dependency, and the Dockerfile installs
   ffmpeg, libsndfile1 and libgomp1.
 - `docker-compose.yml` names the three services and the shared `./data`

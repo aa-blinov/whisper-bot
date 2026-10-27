@@ -13,8 +13,8 @@ docker compose run --rm huey-worker        # one worker, in the foreground
 docker compose run --rm telegram-stt-bot   # one bot, in the foreground
 docker compose down                        # stop the three services
 pip install --no-cache-dir -r requirements.txt
-python app/bot.py                          # the bot, without Docker
-python app/huey_consumer.py                # the worker, without Docker
+python -m app.main                         # the bot, without Docker
+python -m app.worker.consumer              # the worker, without Docker
 ```
 
 The repository has no test command. `tests/test_bot.py` is empty, and no test
@@ -22,7 +22,7 @@ runner is in `requirements.txt`, so a change is checked by running the bot
 against a real token. `python -m compileall app` is a syntax check the
 standard library provides; it is not a project script.
 
-Two things a run outside Compose needs. `app/tasks.py` reads `REDIS_HOST`
+Two things a run outside Compose needs. `app/infra/queue.py` reads `REDIS_HOST`
 (default `redis`) and `REDIS_PORT` (default `6379`), and that name has to
 resolve. ffmpeg has to be on the path: it decodes both the OGG/Opus of a
 voice message and the MP4 of a video note.
@@ -31,23 +31,39 @@ voice message and the MP4 of a video note.
 
 | Path | What it holds |
 | --- | --- |
-| `app/bot.py` | Telegram handler wiring, the media pipeline and every reply a user sees. |
-| `app/admin.py` | The admin panel, the access-request flow and the add/remove conversations. |
-| `app/keyboards.py` | Button labels, reply keyboards and inline keyboards, plus `display_name`. |
+| `app/main.py` | The composition root: settings, the database, the polling loop. |
 | `app/config.py` | One `Settings` object read from the environment. Nothing else calls `os.getenv`. |
-| `app/stt_processor.py` | ONNX sessions (GigaAM for Russian, Whisper for English), audio decoding, chunking. |
-| `app/tasks.py` | The Huey instance: `RedisHuey("whisper-bot", …)` built from `Settings`. |
-| `app/huey_tasks.py` | The `transcribe_task` the bot enqueues and the file deletion. |
-| `app/huey_consumer.py` | The worker entry point: warm the model, then hand Huey the task module. |
-| `app/database.py` | The SQLite schema, the migrations and the counters behind `/stats`. |
+| `app/domain.py` | `User`, `Stats`, `Transcript`: dataclasses with no infrastructure in them. |
+| `app/container.py` | `build_services`: the one place where infrastructure is wired into the services. |
+| `app/bot/app.py` | Builds the `Application`, registers handlers, sets the command menu. |
+| `app/bot/texts.py` | Every string a person reads, in one place, with the escaping done there. |
+| `app/bot/keyboards.py` | Button labels and keyboards, plus the label-to-handler constants. |
+| `app/bot/formatting.py` | HTML escaping and splitting a long transcript. |
+| `app/bot/deps.py` | Getters for the services stored in `bot_data`. |
+| `app/bot/handlers/common.py` | `/start`, `/help`, `/cancel`, the fallback and the error handler. |
+| `app/bot/handlers/guards.py` | "Is this an admin", and answers to button taps. |
+| `app/bot/handlers/requests.py` | The access request card and the Allow/Deny decision. |
+| `app/bot/handlers/media.py` | The voice/video-note pipeline. |
+| `app/bot/handlers/admin.py` | The panel, the list, the cards and the add conversation. |
+| `app/bot/handlers/language.py` | The language menu and the choice. |
+| `app/services/access.py` | Allowlist, admin roles, grant and revoke. No Telegram imports. |
+| `app/services/transcription.py` | Enqueue a task, wait for the result, time out. |
+| `app/services/stats.py` | Counters and the history row. |
+| `app/services/media.py` | Downloaded files as a service, so handlers never touch `infra`. |
+| `app/infra/database.py` | The SQLite schema, the migrations and the queries. |
+| `app/infra/asr.py` | ONNX sessions, audio decoding, 25 s chunking. |
+| `app/infra/media.py` | Downloaded files: where they go and how they are removed. |
+| `app/infra/queue.py` | The Huey instance and `transcribe_task`. |
+| `app/worker/consumer.py` | The worker entry point: logging, warm-up, Huey consumer. |
 | `tests/test_bot.py` | Empty. |
+| `scripts/smoke_flow.py` | End-to-end handler and worker check with only Telegram mocked. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The three services and the shared `./data` volume. |
 | `.env.example` | The variables and their default values. |
 
 ## Traps
 
-- **GigaAM is Russian-only.** `app/stt_processor.py` answers an English
+- **GigaAM is Russian-only.** `app/infra/asr.py` answers an English
   request with a second model (`ASR_MODEL_EN`, `whisper-base` by default),
   loaded lazily on the first such request. Do not remove that branch and
   keep the language button: before, the button only changed a number in the
@@ -57,14 +73,14 @@ voice message and the MP4 of a video note.
   survive `docker compose down`. Without that variable huggingface_hub
   writes into the container's home directory and every rebuild downloads
   260 MB again.
-- **A chunk longer than 25 seconds is cut.** `app/stt_processor.py` splits
+- **A chunk longer than 25 seconds is cut.** `app/infra/asr.py` splits
   the buffer at the quietest frame within two seconds of the limit, because
   the encoder was trained on 30-second windows. Chunks the model still
   rejects are halved.
-- **The bot process must not import the model.** `app/huey_tasks.py` imports
-  `stt_processor` inside `transcribe_task`, and only `app/huey_consumer.py`
-  calls `warm_up()`. Move either import to module level and both containers
-  hold a copy of the session.
+- **The bot process must not import the model.**
+  `app/infra/queue.py` imports the recogniser inside `transcribe_task`, and
+  only `app/worker/consumer.py` calls `warm_up()`. Move either import to
+  module level and both containers hold a copy of the session.
 - **ONNX Runtime wants external weights as real sibling files.** GigaAM v3
   e2e CTC is a single `.onnx` file, so the hub cache is enough; a model that
   ships `.onnx.data` fails on a symlinked cache and needs a flattened
@@ -87,10 +103,10 @@ voice message and the MP4 of a video note.
   the administrator — a deliberate fallback so a fresh deployment is usable,
   logged as a warning. Set `ADMIN_ID` (one id or several, comma-separated)
   to pin the administrator instead.
-- **The reply keyboard is matched by Russian text.** `app/keyboards.py` holds
-  the labels, and `app/admin.py` builds the regexes from the same constants
-  with `re.escape`, anchored. A label that does not match its constant stops
-  the button working.
+- **The reply keyboard is matched by Russian text.** `app/bot/keyboards.py`
+  holds the labels, and `app/bot/handlers/admin.py` builds the regexes from
+  the same constants with `re.escape`, anchored. A label that does not match
+  its constant stops the button working.
 - **The chosen language lives in SQLite, not in memory.** It used to be
   `context.user_data["lang"]` and reset on every restart.
   `database.set_language` is the only writer.
@@ -100,9 +116,14 @@ voice message and the MP4 of a video note.
   fail with `IntegrityError` instead of revoking access.
 - **`created_at` is the day the person was added**, so "new users" in
   `/stats` counts real additions; older rows got the migration timestamp.
-- **Telegram commands are set at start.** `_post_init` in `app/bot.py` calls
-  `set_my_commands`, which is why a command added to the list shows up only
-  after a restart.
+- **Telegram commands are set at start.** `post_init` in `app/bot/app.py`
+  calls `set_my_commands`, which is why a command added to the list shows up
+  only after a restart.
+- **The bot sets its own profile.** The same `post_init` writes the name, the
+  description and the short description, and uploads
+  `app/assets/bot_avatar.png` as the avatar. The avatar goes up only when the
+  profile has none, so after replacing the file set `BOT_PROFILE_FORCE=1`
+  once; otherwise the old picture stays.
 - **A transcript containing HTML characters used to break the reply.** Every
   reply now runs dynamic text through `html.escape` and the application-wide
   `parse_mode` is HTML; do not reintroduce Markdown v1.
@@ -110,10 +131,14 @@ voice message and the MP4 of a video note.
 ## Style / safety rails
 
 - **The strings a person reads are in Russian, and the code matches them.**
-  The keyboard buttons and the `filters.Regex` patterns are the same words,
-  now taken from one constant each.
+  They all live in `app/bot/texts.py`; the keyboard buttons and the
+  `filters.Regex` patterns are the same words, taken from one constant each.
+- **Dependencies point one way.** `bot/handlers` import `bot/texts`,
+  `bot/keyboards`, `bot/deps` and `services`; `services` import `infra` and
+  `domain`; `infra` imports `config` and `domain`. Nothing under `services`
+  or `infra` imports `bot`, and handlers never open SQLite directly.
 - **Every reply is HTML.** `Defaults(parse_mode=ParseMode.HTML)` is set once
-  in `app/bot.py`.
+  in `app/bot/app.py`.
 - **The model stays on the CPU.** `onnxruntime` CPU wheels and
   `providers=["CPUExecutionProvider"]` are one decision written twice.
 - **Every dependency is pinned.** A new dependency that needs a system

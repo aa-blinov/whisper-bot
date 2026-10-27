@@ -1,6 +1,6 @@
 <!-- house-style: emoji-ok -->
 <!-- The pictographs on the /stats screen are the product: they are what the
-     administrator reads. app/bot.py carries the same marker. -->
+     administrator reads. app/bot/texts.py carries the same marker. -->
 
 ---
 name: whisper-bot
