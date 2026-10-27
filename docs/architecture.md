@@ -60,7 +60,9 @@ voice message or video note
 The bot writes the file into `data/` and the worker deletes that exact path
 after the transcription. The bot waits for the result with `aget_result` and
 edits one status message while it waits; the wait is capped by
-`asyncio.wait_for`, from 60 seconds upward depending on the recording.
+`asyncio.wait_for`, 120 seconds at the floor and 900 at the ceiling, because
+the first message after a fresh deploy can arrive while the worker is still
+warming the models.
 
 The history is written after the reply is sent, one row per finished
 transcription: the timestamp, the wall-clock duration, the kind of media, the

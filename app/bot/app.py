@@ -6,7 +6,8 @@ import logging
 import os
 from pathlib import Path
 
-from telegram import BotCommand, InputProfilePhotoStatic, Update
+import httpx
+from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -27,6 +28,7 @@ from app.container import Services
 logger = logging.getLogger(__name__)
 
 AVATAR_PATH = Path(__file__).resolve().parent.parent / "assets" / "bot_avatar.png"
+READY_FILE = os.getenv("BOT_READY_FILE", "/tmp/bot-ready")
 
 BOT_NAME = "Lazy to Text"
 DESCRIPTION = (
@@ -40,6 +42,27 @@ WELCOME_COMMANDS = [
     BotCommand("admin", "Панель администратора"),
     BotCommand("help", "Справка"),
 ]
+
+
+async def _upload_avatar(bot, path: Path) -> None:
+    """Залить картинку в профиль бота.
+
+    `Bot.set_my_profile_photo` в PTB 22.8 принимает только `file_id` или
+    ссылку: файл в этом методе он не умеет отправлять. Поэтому тот же
+    запрос, что делает Bot API для загрузки, отправляем сами.
+    """
+    url = f"{bot.base_url}/setMyProfilePhoto"
+    async with httpx.AsyncClient(timeout=60) as client:
+        with open(path, "rb") as handle:
+            response = await client.post(
+                url,
+                data={"photo": '{"type":"static","photo":"attach://avatar"}'},
+                files={"avatar": (path.name, handle, "image/png")},
+            )
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("description", "setMyProfilePhoto failed"))
 
 
 async def _update_profile(bot) -> None:
@@ -60,9 +83,7 @@ async def _update_profile(bot) -> None:
             photos = await bot.get_user_profile_photos(bot.id, limit=1)
             if photos.total_count:
                 return
-        await bot.set_my_profile_photo(
-            InputProfilePhotoStatic(photo=str(AVATAR_PATH))
-        )
+        await _upload_avatar(bot, AVATAR_PATH)
         logger.info("Аватар бота обновлён из %s", AVATAR_PATH)
     except Exception as exc:
         logger.warning("Не удалось обновить аватар бота: %s", exc)
@@ -71,6 +92,12 @@ async def _update_profile(bot) -> None:
 async def post_init(application) -> None:
     """Профиль бота в Telegram: команды, имя, описание, аватар."""
     await _update_profile(application.bot)
+    # Файл готовности читает healthcheck в compose: он появляется, когда
+    # приложение собрано и профиль обновлён, до старта long polling.
+    try:
+        Path(READY_FILE).write_text("ready\n", encoding="utf-8")
+    except OSError as exc:
+        logger.debug("Не удалось записать %s: %s", READY_FILE, exc)
     logger.info("Бот запущен: @%s", application.bot.username)
 
 

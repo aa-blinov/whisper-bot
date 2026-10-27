@@ -25,6 +25,18 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Changed
 
+- **The loading is now measurable and predictable.** The worker warms the
+  Russian and the English models before it reports healthy, so a message sent
+  during the first start waits in the queue instead of failing on a download:
+  214 MB plus 107 MB, about 30 seconds once on a 9 MB/s link, then 5.5
+  seconds for a warm start. A short voice message comes back in under a
+  second and the wait now has a 120-second floor.
+- **The avatar is circle-safe.** Telegram crops the profile photo with a
+  circle, and the rounded-square app icon lost its corners there. The file is
+  now a full-bleed cream square with the microphone centred at 60% height,
+  built by `scripts/make_avatar.py`. The upload itself uses a raw multipart
+  request, because `Bot.set_my_profile_photo` in python-telegram-bot 22.8
+  takes a `file_id` or a URL only.
 - **The README is the front door again.** The title is the product name, the
   live page and the bot are linked from the first lines, and the screenshot
   of the page sits under the badges.

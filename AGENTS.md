@@ -66,15 +66,23 @@ voice message and the MP4 of a video note.
 ## Traps
 
 - **GigaAM is Russian-only.** `app/infra/asr.py` answers an English
-  request with a second model (`ASR_MODEL_EN`, `whisper-base` by default),
-  loaded lazily on the first such request. Do not remove that branch and
-  keep the language button: before, the button only changed a number in the
-  database and every model ignored it.
+  request with a second model (`ASR_MODEL_EN`, `whisper-base` by default).
+  Both are warmed at worker start (`WARM_UP_EN` turns the English one off),
+  so no request ever waits for a download. Do not remove the English branch
+  and keep the language button: the button would then change a number that
+  every model ignores.
 - **The model is downloaded on first start.** `HF_HOME` points at
   `/app/data/hf`, so the weights land in the same volume as the database and
-  survive `docker compose down`. Without that variable huggingface_hub
-  writes into the container's home directory and every rebuild downloads
-  260 MB again.
+  survive `docker compose down`. Measured on this machine: 214 MB for GigaAM
+  plus 107 MB for `whisper-base`, about 30 seconds on a 9 MB/s link; a warm
+  start is 5.5 seconds for both models. Without that variable
+  huggingface_hub writes into the container's home directory and every
+  rebuild downloads it all again.
+- **The worker warms both models and then writes `/tmp/worker-ready`.** The
+  compose healthcheck reads that file, so `healthy` means the model has
+  actually run, not that the process started. `WARM_UP_EN=0` skips the
+  English warm-up; the first English request then pays the 107 MB download
+  inside its own timeout.
 - **A chunk longer than 25 seconds is cut.** `app/infra/asr.py` splits
   the buffer at the quietest frame within two seconds of the limit, because
   the encoder was trained on 30-second windows. Chunks the model still
@@ -126,6 +134,15 @@ voice message and the MP4 of a video note.
   `app/assets/bot_avatar.png` as the avatar. The avatar goes up only when the
   profile has none, so after replacing the file set `BOT_PROFILE_FORCE=1`
   once; otherwise the old picture stays.
+- **The avatar is uploaded with a raw HTTP multipart request.**
+  `Bot.set_my_profile_photo` in python-telegram-bot 22.8 accepts a `file_id`
+  or a URL only; passing a file makes the API answer "Field photo must be of
+  type string". `app/bot/app.py` posts the same `attach://` form that
+  BotFather does, with `httpx`, which is why that dependency is pinned.
+- **The avatar file is circle-safe.** Telegram crops the profile photo with a
+  circle, so `app/assets/bot_avatar.png` is a full-bleed cream square with
+  the microphone centred at 60% height, not the rounded-square app icon with
+  transparent corners. `scripts/make_avatar.py` rebuilds it from the icon.
 - **A transcript containing HTML characters used to break the reply.** Every
   reply now runs dynamic text through `html.escape` and the application-wide
   `parse_mode` is HTML; do not reintroduce Markdown v1.

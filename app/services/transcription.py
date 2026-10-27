@@ -22,7 +22,7 @@ class TranscriptionService:
 
     def __init__(
         self,
-        timeout_min: int = 60,
+        timeout_min: int = 120,
         timeout_max: int = 900,
         task=transcribe_task,
     ) -> None:

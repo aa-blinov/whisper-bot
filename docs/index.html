@@ -160,7 +160,7 @@
           </tbody>
         </table>
       </div>
-      <p class="fine">Вес дан для файла int8 в кэше <code>data/hf</code>. Короткое голосовое возвращается примерно за секунду, модель прогревается при старте воркера.</p>
+      <p class="fine">Вес дан для файла int8 в кэше <code>data/hf</code>. Обе модели прогреваются при старте воркера, короткое голосовое возвращается примерно за секунду.</p>
       <figure class="shot reveal">
         <img src="screenshots/chat.svg" width="960" height="640" loading="lazy" alt="Схема: голосовое сообщение попадает в бота, задача уходит в очередь Redis, воркер распознаёт её моделью GigaAM v3, текст возвращается в чат, а запись сохраняется в SQLite.">
         <figcaption>Путь запроса: Telegram, Redis, воркер с моделью, ответ в чат и строка в истории.</figcaption>
@@ -214,7 +214,7 @@ docker compose up --build">Скопировать</button>
       <div class="install-notes">
         <div>
           <h3>Проверить</h3>
-          <p><code>docker compose ps</code>: три сервиса, redis healthy. Первый старт скачивает 214 МБ модели в <code>data/hf</code> и дальше берёт её оттуда.</p>
+          <p><code>docker compose ps</code>: три сервиса, redis healthy, бот и воркер healthy после прогрева моделей. Первый старт скачивает 214 МБ русской модели и 107 МБ английской в <code>data/hf</code>, дальше берёт их оттуда.</p>
         </div>
         <div>
           <h3>Обновить</h3>

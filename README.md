@@ -39,9 +39,17 @@ Three containers start: `redis` for the queue, `telegram-stt-bot` for the
 conversation, and `huey-worker` for the transcription. The bot uses long
 polling, so the host needs no domain name and no certificate.
 
-The first start downloads the GigaAM v3 ONNX weights into `data/hf`, and
-every start after that reads them from there. The download is about 260 MB
-and needs the internet once.
+`docker compose ps` shows `healthy` only when a container is actually ready:
+the worker after both models have run, the bot after its profile is set. On a
+cold start the worker is the last one to go healthy, because it downloads the
+weights.
+
+The first start downloads the ONNX weights into `data/hf`: 214 MB for the
+Russian model and 107 MB for the English one. On a fast link that is about
+30 seconds, and every start after that reads them from the volume. The worker
+warms both models before it reports healthy, so a message that arrives during
+the first start waits in the queue instead of failing. After the warm-up a
+short voice message comes back in under a second.
 
 The bot talks in Russian. The person it talks to picks the recognition
 language, Russian or English, from the keyboard.
@@ -154,6 +162,7 @@ starts. `.env.example` holds the same list with the values filled in.
 | `ASR_MODEL_EN` | `whisper-base` | The ONNX model that handles English. |
 | `ASR_QUANTIZATION` | `int8` | Weight precision; `int8`, `fp16` or empty for fp32. |
 | `ASR_THREADS` | `4` | Threads onnxruntime may use. |
+| `WARM_UP_EN` | `1` | Warm the English model at worker start. `0` saves 107 MB of download, but the first English message waits for it. |
 | `HF_TOKEN` | none | Optional Hugging Face token, for faster downloads. |
 | `HUEY_WORKER_COUNT` | `1` | The number of worker processes. Set in `docker-compose.yml`. |
 | `HUEY_WORKER_TYPE` | `process` | The worker type. Set in `docker-compose.yml`. |

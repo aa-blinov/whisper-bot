@@ -42,6 +42,12 @@ def _int(raw: str | None, default: int) -> int:
         return default
 
 
+def _bool(raw: str | None, default: bool) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off", "")
+
+
 @dataclass(frozen=True)
 class Settings:
     """Всё, что бот и воркер берут из окружения."""
@@ -59,6 +65,7 @@ class Settings:
     asr_model_en: str = "whisper-base"
     asr_quantization: str = "int8"
     asr_threads: int = 4
+    warm_up_en: bool = True
     max_media_seconds: int = 300
 
     # Разобранный `.env` держим рядом, чтобы не перечитывать файл в тестах.
@@ -85,5 +92,6 @@ class Settings:
             asr_model_en=os.getenv("ASR_MODEL_EN", "whisper-base").strip() or "whisper-base",
             asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
             asr_threads=max(1, _int(os.getenv("ASR_THREADS"), 4)),
+            warm_up_en=_bool(os.getenv("WARM_UP_EN"), True),
             max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
         )

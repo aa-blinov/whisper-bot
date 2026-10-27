@@ -1,4 +1,4 @@
-﻿services:
+services:
   redis:
     image: redis:7-alpine
     container_name: whisper-redis
@@ -24,6 +24,14 @@
       - REDIS_PORT=6379
     volumes:
       - ./data:/app/data
+    healthcheck:
+      # Бот пишет файл в post_init: healthy значит «приложение собрано и
+      # профиль обновлён», а не «контейнер запущен».
+      test: ["CMD", "test", "-f", "/tmp/bot-ready"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       redis:
         condition: service_healthy
@@ -45,6 +53,14 @@
       - HUEY_WORKER_TYPE=process
     volumes:
       - ./data:/app/data
+    healthcheck:
+      # Воркер пишет файл после прогрева, поэтому healthy значит «модель
+      # действительно посчитала», а не «процесс запустился».
+      test: ["CMD", "test", "-f", "/tmp/worker-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 180s
     depends_on:
       redis:
         condition: service_healthy
