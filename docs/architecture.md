@@ -17,13 +17,14 @@ Four layers under `app/`, and the imports only ever point one way:
 ```
 bot/       Telegram: handlers, texts, keyboards          (depends on services, domain)
 services/  the rules: access, transcription, stats       (depends on infra, domain)
-infra/     SQLite, ONNX, files, Huey                     (depends on config, domain)
+infra/     Postgres, ONNX, Huey                          (depends on config, domain)
 domain.py  User, Stats, Transcript                       (depends on nothing)
 ```
 
-`app/main.py` is the composition root: it reads `Settings`, opens the
-database, builds the `Application` and starts polling. `app/worker/consumer.py`
-is the second process: it warms the model and hands the task module to Huey.
+`app/main.py` is the composition root: it reads `Settings`, creates the
+schema, builds the `Application` and starts polling.
+`app/worker/consumer.py` is the second process: it warms the model and hands
+the task module to Huey.
 
 | Layer | What it is responsible for |
 | --- | --- |
@@ -37,32 +38,32 @@ is the second process: it warms the model and hands the task module to Huey.
 | `app/services/access.py` | Allowlist, admin roles, grant and revoke, the language. |
 | `app/services/transcription.py` | Enqueue the task, wait, time out, return a `Transcript`. |
 | `app/services/stats.py` | The counters and the history row. |
-| `app/services/media.py` | Downloaded files as a service, so the bot layer stays out of `infra`. |
-| `app/infra/database.py` | The SQLite schema, the migrations and the queries. |
-| `app/infra/asr.py` | The ONNX sessions, the audio decoding, the chunking. |
-| `app/infra/media.py` | Where downloaded files go and how they are removed. |
+| `app/infra/database.py` | The Postgres schema, the pool and the queries. |
+| `app/infra/asr.py` | The ONNX sessions, ffmpeg decoding (path or URL), the chunking. |
 | `app/infra/queue.py` | The Huey instance and `transcribe_task`. |
 
 ## The data flow
 
 ```
-voice message or video note
-  -> app/bot/handlers/media.py: download to data/<uuid hex>_<type>.bin
-  -> app/services/transcription.py -> Redis: transcribe_task(path, type, language)
+voice message, video note, audio file or video file
+  -> app/bot/handlers/media.py: get_file, take the URL
+  -> app/services/transcription.py -> Redis: transcribe_task(url, type, language)
   -> app/infra/queue.py -> app/infra/asr.py
-       soundfile (WAV/FLAC/OGG) or ffmpeg (MP4 and everything else)
+       ffmpeg reads the URL over HTTPS
        -> mono float32 at 16 kHz
        -> GigaAM v3 e2e CTC, 25 s chunks, quietest-frame cuts
   -> Redis: the result
   -> app/bot/handlers/media.py: the reply in the chat
 ```
 
-The bot writes the file into `data/` and the worker deletes that exact path
-after the transcription. The bot waits for the result with `aget_result` and
-edits one status message while it waits; the wait is capped by
-`asyncio.wait_for`, 120 seconds at the floor and 900 at the ceiling, because
-the first message after a fresh deploy can arrive while the worker is still
-warming the models.
+Nothing is written to disk for a request. The bot only resolves the file URL
+and enqueues it; the worker's ffmpeg pulls the stream from Telegram. The URL
+carries the bot token, so it is never logged.
+
+The bot waits for the result with `aget_result` and edits one status message
+while it waits; the wait is capped by `asyncio.wait_for`, 120 seconds at the
+floor and 900 at the ceiling, because the first message after a fresh deploy
+can arrive while the worker is still warming the models.
 
 The history is written after the reply is sent, one row per finished
 transcription: the timestamp, the wall-clock duration, the kind of media, the
@@ -88,18 +89,33 @@ model, not a decoder hint.
 
 ### The transcription runs in a second process
 
-The bot hands the file to Redis and waits. A transcription that takes thirty
+The bot hands the URL to Redis and waits. A transcription that takes thirty
 seconds does not stop the bot from answering the next message, and the person
 sending the audio gets a status line rather than a frozen chat.
 
-The cost is that the two containers have to meet twice: in Redis, and in the
-`data/` directory through the bind mount `./data:/app/data`. If the mount is
-missing on one side, the worker never finds the file and the bot waits for a
-result that never arrives.
+The cost is that the two containers have to meet in Redis, and the worker has
+to reach Telegram itself to read the file. The URL carries the bot token, so
+it is passed through Redis and never logged.
 
 The second cost is memory discipline: `app/infra/queue.py` imports the
 recogniser inside the task, and only the worker entry point warms it up.
 Moving either import to module level puts a session in the bot process too.
+
+### Two threads, one model
+
+Huey runs with `-w 2 -k thread`. Threads share the process and the loaded
+ONNX sessions, so the second worker costs an audio buffer rather than another
+700 MB of weights. Measured: 8 clients with 12-second clips finish in 3.3
+seconds, 20 clients in 10 seconds. A `process` worker would need its own copy
+of both models.
+
+### Postgres instead of SQLite
+
+The history is a small table, but two worker threads and the bot can write at
+once, and SQLite would serialise them behind one file lock on the bind mount.
+Postgres takes parallel writes; the bot uses a `psycopg_pool` connection pool
+of 1 to 8 connections. Removing a person keeps their rows: the foreign key is
+`ON DELETE SET NULL`.
 
 ### The model stays on the CPU, and it is small
 

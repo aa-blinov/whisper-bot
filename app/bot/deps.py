@@ -10,7 +10,6 @@ from telegram.ext import ContextTypes
 
 from app.config import Settings
 from app.services.access import AccessService
-from app.services.media import MediaService
 from app.services.stats import StatsService
 from app.services.transcription import TranscriptionService
 
@@ -29,7 +28,3 @@ def stats(context: ContextTypes.DEFAULT_TYPE) -> StatsService:
 
 def transcription(context: ContextTypes.DEFAULT_TYPE) -> TranscriptionService:
     return context.bot_data["transcription"]
-
-
-def media(context: ContextTypes.DEFAULT_TYPE) -> MediaService:
-    return context.bot_data["media"]

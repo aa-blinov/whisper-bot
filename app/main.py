@@ -26,8 +26,8 @@ def main() -> int:
         return 1
 
     os.makedirs(settings.data_dir, exist_ok=True)
-    database.init_db(settings.db_path, settings.admin_ids)
-    if not settings.admin_ids and not database.has_admins(settings.db_path):
+    database.init_db(settings.database_url, settings.admin_ids)
+    if not settings.admin_ids and not database.has_admins(settings.database_url):
         logger.warning(
             "ADMIN_ID не задан: администратором станет первый, кто напишет /start. "
             "Укажи ADMIN_ID в .env, чтобы закрепить админа."
@@ -37,7 +37,9 @@ def main() -> int:
     logger.info("Запуск long polling")
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
+        # Ничего не выбрасываем: сообщения, пришедшие пока бот лежал,
+        # обработаются после старта.
+        drop_pending_updates=False,
         close_loop=False,
     )
     return 0

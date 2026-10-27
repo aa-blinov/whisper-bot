@@ -45,7 +45,17 @@ def main() -> None:
     with open(READY_FILE, "w", encoding="utf-8") as handle:
         handle.write("ready\n")
 
-    sys.argv = ["huey_consumer.py", "app.infra.queue.huey"]
+    # Huey читает число и тип воркеров из аргументов, а не из окружения.
+    workers = os.getenv("HUEY_WORKER_COUNT", "1")
+    worker_type = os.getenv("HUEY_WORKER_TYPE", "thread")
+    sys.argv = [
+        "huey_consumer.py",
+        "-w",
+        workers,
+        "-k",
+        worker_type,
+        "app.infra.queue.huey",
+    ]
     consumer_main()
 
 

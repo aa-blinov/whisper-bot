@@ -1,120 +1,115 @@
-"""SQLite: пользователи и история запросов.
+"""Postgres: пользователи и история запросов.
 
-Схема создаётся и дополняется при старте, поэтому база, оставшаяся от
-старой версии, продолжает работать: недостающие колонки добавляются, а не
-пересоздают таблицу.
+Почему не SQLite: историю пишет бот, а читает статистику он же, но при
+нескольких процессах один файл становится точкой сериализации. Postgres
+даёт нормальную параллельную запись и переживает перезапуск контейнера.
+
+Схема создаётся и дополняется при старте. Соединения берутся из пула:
+запросы идут из цикла событий бота и из потоков, пул сам ждёт свободное
+соединение.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from app.domain import Stats, User
 
 logger = logging.getLogger(__name__)
 
-_connections: dict[str, sqlite3.Connection] = {}
-_connections_lock = threading.Lock()
-
 USERS_SCHEMA = """
     CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        is_admin INTEGER NOT NULL DEFAULT 0,
-        first_name TEXT DEFAULT '',
-        last_name TEXT DEFAULT '',
-        username TEXT DEFAULT '',
+        user_id BIGINT PRIMARY KEY,
+        is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+        first_name TEXT NOT NULL DEFAULT '',
+        last_name TEXT NOT NULL DEFAULT '',
+        username TEXT NOT NULL DEFAULT '',
         language TEXT NOT NULL DEFAULT 'ru',
-        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
 """
 
 TASKS_SCHEMA = """
     CREATE TABLE IF NOT EXISTS tasks (
-        task_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        timestamp TEXT NOT NULL,
-        duration_seconds REAL,
+        task_id BIGSERIAL PRIMARY KEY,
+        user_id BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
+        timestamp TIMESTAMPTZ NOT NULL,
+        duration_seconds DOUBLE PRECISION,
         original_file_type TEXT,
         recognized_text TEXT,
-        language TEXT,
-        FOREIGN KEY (user_id) REFERENCES users (user_id)
+        language TEXT
     )
 """
 
-USER_COLUMNS = (
-    ("first_name", "TEXT DEFAULT ''"),
-    ("last_name", "TEXT DEFAULT ''"),
-    ("username", "TEXT DEFAULT ''"),
-    ("language", "TEXT NOT NULL DEFAULT 'ru'"),
-    ("created_at", "TEXT"),
+INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_tasks_timestamp ON tasks(timestamp)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)",
 )
 
-TASK_COLUMNS = (("language", "TEXT"),)
+_pools: dict[str, ConnectionPool] = {}
+_pools_lock = threading.Lock()
 
 
-def connect(db_path: str) -> sqlite3.Connection:
-    """Соединение с базой, одно на путь.
+def pool(database_url: str) -> ConnectionPool:
+    """Пул соединений, один на строку подключения."""
+    with _pools_lock:
+        existing = _pools.get(database_url)
+        if existing is not None:
+            return existing
+        created = ConnectionPool(
+            database_url,
+            min_size=1,
+            max_size=8,
+            open=False,
+            kwargs={"row_factory": dict_row},
+        )
+        created.open(wait=True, timeout=15)
+        _pools[database_url] = created
+        return created
 
-    Соединение переиспользуется: открывать новое на каждый запрос на bind
-    mount стоит около 20 мс, а переиспользованное делает вставку за 2 мс.
-    Соединение открыто с `check_same_thread=False`, но используется только
-    из потока цикла событий: `with connect(...)` коммитит и не закрывает,
-    поэтому один и тот же объект служит дальше.
 
-    WAL и synchronous=NORMAL включены намеренно: база лежит на bind mount,
-    и на нём каждая запись с fsync стоила около 30 мс. Бот пишет историю
-    прямо в обработчике, в одном цикле событий, поэтому эти миллисекунды
-    складывались в заметные паузы под нагрузкой.
-
-    Внешние ключи намеренно не включаем: удаление доступа не должно
-    стирать историю запросов, на которой считает `/stats`. Ограничение
-    объявлено в схеме, но SQLite его не проверяет.
-    """
-    path = os.path.abspath(db_path)
-    with _connections_lock:
-        conn = _connections.get(path)
-        if conn is not None:
-            return conn
-
-        conn = sqlite3.connect(path, timeout=15, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=5000")
-        except sqlite3.Error as exc:
-            logger.warning("Не удалось включить WAL для %s: %s", db_path, exc)
-        _connections[path] = conn
-        return conn
+@contextmanager
+def connect(database_url: str):
+    """Соединение из пула: коммит при выходе, возврат в пул всегда."""
+    with pool(database_url).connection() as conn:
+        yield conn
 
 
 def close_all() -> None:
-    """Закрыть все соединения: нужно тестам и аккуратному завершению."""
-    with _connections_lock:
-        for conn in _connections.values():
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
-        _connections.clear()
+    """Закрыть пулы: нужно тестам и аккуратному завершению."""
+    with _pools_lock:
+        for container in _pools.values():
+            container.close()
+        _pools.clear()
 
 
-def _add_missing_columns(conn: sqlite3.Connection, table: str, columns) -> None:
-    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
-    for name, decl in columns:
-        if name in existing:
-            continue
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-        except sqlite3.OperationalError as exc:  # колонка уже есть в другой версии
-            logger.warning("Миграция %s.%s не удалась: %s", table, name, exc)
+def init_db(database_url: str, admin_ids: tuple[int, ...] = ()) -> None:
+    """Создать схему и завести администраторов из окружения."""
+    try:
+        with connect(database_url) as conn:
+            conn.execute(USERS_SCHEMA)
+            conn.execute(TASKS_SCHEMA)
+            for statement in INDEXES:
+                conn.execute(statement)
+            for admin_id in admin_ids:
+                conn.execute(
+                    """INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE)
+                       ON CONFLICT (user_id) DO UPDATE SET is_admin = TRUE""",
+                    (admin_id,),
+                )
+        logger.info("Схема базы данных готова")
+    except psycopg.Error as exc:
+        logger.exception("Не удалось инициализировать базу данных: %s", exc)
 
 
-def _row_to_user(row: sqlite3.Row) -> User:
+def _row_to_user(row: dict) -> User:
     return User(
         user_id=int(row["user_id"]),
         is_admin=bool(row["is_admin"]),
@@ -122,93 +117,59 @@ def _row_to_user(row: sqlite3.Row) -> User:
         last_name=row["last_name"] or "",
         username=row["username"] or "",
         language=row["language"] or "ru",
-        created_at=row["created_at"],
+        created_at=row["created_at"].isoformat() if row["created_at"] else None,
     )
 
 
-def init_db(db_path: str, admin_ids: tuple[int, ...] = ()) -> None:
-    """Создать схему, дополнить её и завести администраторов из окружения."""
+def get_user(database_url: str, user_id: int) -> User | None:
     try:
-        with connect(db_path) as conn:
-            conn.execute(USERS_SCHEMA)
-            conn.execute(TASKS_SCHEMA)
-            _add_missing_columns(conn, "users", USER_COLUMNS)
-            _add_missing_columns(conn, "tasks", TASK_COLUMNS)
-            conn.execute(
-                "UPDATE users SET created_at = datetime('now') "
-                "WHERE created_at IS NULL OR created_at = ''"
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_timestamp ON tasks(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id)")
-
-            for admin_id in admin_ids:
-                row = conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ?", (admin_id,)
-                ).fetchone()
-                if row is None:
-                    conn.execute(
-                        "INSERT INTO users (user_id, is_admin) VALUES (?, 1)", (admin_id,)
-                    )
-                    logger.info("Администратор %s добавлен в базу при старте", admin_id)
-                else:
-                    conn.execute(
-                        "UPDATE users SET is_admin = 1 WHERE user_id = ?", (admin_id,)
-                    )
-            conn.commit()
-        logger.info("База данных '%s' готова", db_path)
-    except sqlite3.Error as exc:
-        logger.exception("Не удалось инициализировать базу данных: %s", exc)
-
-
-def get_user(db_path: str, user_id: int) -> User | None:
-    try:
-        with connect(db_path) as conn:
+        with connect(database_url) as conn:
             row = conn.execute(
-                "SELECT * FROM users WHERE user_id = ?", (user_id,)
+                "SELECT * FROM users WHERE user_id = %s", (user_id,)
             ).fetchone()
         return _row_to_user(row) if row else None
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка чтения пользователя %s: %s", user_id, exc)
         return None
 
 
-def list_users(db_path: str) -> list[User]:
+def list_users(database_url: str) -> list[User]:
     """Все допущенные, администраторы первыми, затем по имени."""
     try:
-        with connect(db_path) as conn:
+        with connect(database_url) as conn:
             rows = conn.execute(
                 """SELECT * FROM users
-                   ORDER BY is_admin DESC, LOWER(COALESCE(first_name, '')), user_id"""
+                   ORDER BY is_admin DESC, LOWER(first_name), user_id"""
             ).fetchall()
         return [_row_to_user(row) for row in rows]
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка чтения списка пользователей: %s", exc)
         return []
 
 
-def count_users(db_path: str) -> int:
+def count_users(database_url: str) -> int:
     try:
-        with connect(db_path) as conn:
-            return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
-    except sqlite3.Error as exc:
+        with connect(database_url) as conn:
+            return int(conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"])
+    except psycopg.Error as exc:
         logger.error("Ошибка подсчёта пользователей: %s", exc)
         return 0
 
 
-def has_admins(db_path: str) -> bool:
+def has_admins(database_url: str) -> bool:
     try:
-        with connect(db_path) as conn:
-            return (
-                conn.execute("SELECT 1 FROM users WHERE is_admin = 1 LIMIT 1").fetchone()
-                is not None
-            )
-    except sqlite3.Error as exc:
+        with connect(database_url) as conn:
+            row = conn.execute(
+                "SELECT 1 AS one FROM users WHERE is_admin LIMIT 1"
+            ).fetchone()
+        return row is not None
+    except psycopg.Error as exc:
         logger.error("Ошибка проверки администраторов: %s", exc)
         return False
 
 
 def add_user(
-    db_path: str,
+    database_url: str,
     user_id: int,
     *,
     is_admin: bool = False,
@@ -218,69 +179,58 @@ def add_user(
 ) -> bool:
     """Добавить или обновить пользователя. True, если запись новая."""
     try:
-        with connect(db_path) as conn:
+        with connect(database_url) as conn:
             row = conn.execute(
-                "SELECT user_id FROM users WHERE user_id = ?", (user_id,)
+                """INSERT INTO users (user_id, is_admin, first_name, last_name, username)
+                   VALUES (%s, %s, %s, %s, %s)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       first_name = COALESCE(NULLIF(EXCLUDED.first_name, ''), users.first_name),
+                       last_name = COALESCE(NULLIF(EXCLUDED.last_name, ''), users.last_name),
+                       username = COALESCE(NULLIF(EXCLUDED.username, ''), users.username),
+                       is_admin = users.is_admin OR EXCLUDED.is_admin
+                   RETURNING (xmax = 0) AS inserted""",
+                (user_id, is_admin, first_name or "", last_name or "", username or ""),
             ).fetchone()
-            created = row is None
-            first_name, last_name, username = (
-                first_name or "",
-                last_name or "",
-                username or "",
-            )
-            if created:
-                conn.execute(
-                    """INSERT INTO users (user_id, is_admin, first_name, last_name, username)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (user_id, int(is_admin), first_name, last_name, username),
-                )
-            else:
-                conn.execute(
-                    """UPDATE users
-                       SET first_name = COALESCE(NULLIF(?, ''), first_name),
-                           last_name = COALESCE(NULLIF(?, ''), last_name),
-                           username = COALESCE(NULLIF(?, ''), username),
-                           is_admin = MAX(is_admin, ?)
-                       WHERE user_id = ?""",
-                    (first_name, last_name, username, int(is_admin), user_id),
-                )
-            conn.commit()
+        created = bool(row and row["inserted"])
         logger.info("Пользователь %s %s", "добавлен" if created else "обновлён", user_id)
         return created
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка при добавлении пользователя %s: %s", user_id, exc)
         return False
 
 
-def remove_user(db_path: str, user_id: int) -> bool:
-    """Убрать пользователя из списка. True, если он там был."""
+def remove_user(database_url: str, user_id: int) -> bool:
+    """Убрать пользователя из списка. True, если он там был.
+
+    История остаётся: внешний ключ объявлен с ON DELETE SET NULL, поэтому
+    запросы человека остаются в таблице без привязки к пользователю.
+    """
     try:
-        with connect(db_path) as conn:
-            cursor = conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
-            conn.commit()
+        with connect(database_url) as conn:
+            cursor = conn.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
             removed = cursor.rowcount > 0
         if removed:
             logger.info("Пользователь %s удалён", user_id)
         return removed
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка при удалении пользователя %s: %s", user_id, exc)
         return False
 
 
-def set_language(db_path: str, user_id: int, language: str) -> None:
+def set_language(database_url: str, user_id: int, language: str) -> None:
     """Запомнить выбранный язык, чтобы он переживал перезапуск бота."""
     try:
-        with connect(db_path) as conn:
+        with connect(database_url) as conn:
             conn.execute(
-                "UPDATE users SET language = ? WHERE user_id = ?", (language, user_id)
+                "UPDATE users SET language = %s WHERE user_id = %s",
+                (language, user_id),
             )
-            conn.commit()
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка сохранения языка %s: %s", user_id, exc)
 
 
 def record_task(
-    db_path: str,
+    database_url: str,
     user_id: int,
     duration_seconds: float,
     file_type: str,
@@ -288,68 +238,64 @@ def record_task(
     language: str | None = None,
 ) -> None:
     try:
-        with connect(db_path) as conn:
+        with connect(database_url) as conn:
             conn.execute(
                 """INSERT INTO tasks
                    (user_id, timestamp, duration_seconds, original_file_type,
                     recognized_text, language)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    user_id,
-                    datetime.now().isoformat(timespec="seconds"),
-                    duration_seconds,
-                    file_type,
-                    text,
-                    language,
-                ),
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (user_id, datetime.now(), duration_seconds, file_type, text, language),
             )
-            conn.commit()
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка записи запроса пользователя %s: %s", user_id, exc)
 
 
-def stats(db_path: str) -> Stats:
+def stats(database_url: str) -> Stats:
     """Счётчики для `/stats`: пользователи, запросы за сегодня и за неделю."""
     try:
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
-        today_iso = today_start.isoformat(timespec="seconds")
-        week_iso = week_start.isoformat(timespec="seconds")
 
-        with connect(db_path) as conn:
-            total_users = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+        with connect(database_url) as conn:
+            total_users = int(
+                conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+            )
             today_active = int(
                 conn.execute(
-                    "SELECT COUNT(DISTINCT user_id) FROM tasks WHERE timestamp >= ?",
-                    (today_iso,),
-                ).fetchone()[0]
+                    "SELECT COUNT(DISTINCT user_id) AS n FROM tasks WHERE timestamp >= %s",
+                    (today_start,),
+                ).fetchone()["n"]
             )
             today_requests = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM tasks WHERE timestamp >= ?", (today_iso,)
-                ).fetchone()[0]
+                    "SELECT COUNT(*) AS n FROM tasks WHERE timestamp >= %s",
+                    (today_start,),
+                ).fetchone()["n"]
             )
             today_new = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM users WHERE created_at >= ?", (today_iso,)
-                ).fetchone()[0]
+                    "SELECT COUNT(*) AS n FROM users WHERE created_at >= %s",
+                    (today_start,),
+                ).fetchone()["n"]
             )
             week_active = int(
                 conn.execute(
-                    "SELECT COUNT(DISTINCT user_id) FROM tasks WHERE timestamp >= ?",
-                    (week_iso,),
-                ).fetchone()[0]
+                    "SELECT COUNT(DISTINCT user_id) AS n FROM tasks WHERE timestamp >= %s",
+                    (week_start,),
+                ).fetchone()["n"]
             )
             week_requests = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM tasks WHERE timestamp >= ?", (week_iso,)
-                ).fetchone()[0]
+                    "SELECT COUNT(*) AS n FROM tasks WHERE timestamp >= %s",
+                    (week_start,),
+                ).fetchone()["n"]
             )
             week_new = int(
                 conn.execute(
-                    "SELECT COUNT(*) FROM users WHERE created_at >= ?", (week_iso,)
-                ).fetchone()[0]
+                    "SELECT COUNT(*) AS n FROM users WHERE created_at >= %s",
+                    (week_start,),
+                ).fetchone()["n"]
             )
 
         return Stats(
@@ -361,6 +307,6 @@ def stats(db_path: str) -> Stats:
             week_requests=week_requests,
             week_new=week_new,
         )
-    except sqlite3.Error as exc:
+    except psycopg.Error as exc:
         logger.error("Ошибка чтения статистики: %s", exc)
         return Stats()

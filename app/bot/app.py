@@ -167,7 +167,6 @@ def build_application(settings: Settings, services: Services):
     application.bot_data["access"] = services.access
     application.bot_data["stats"] = services.stats
     application.bot_data["transcription"] = services.transcription
-    application.bot_data["media"] = services.media
 
     private = filters.ChatType.PRIVATE
 
@@ -200,7 +199,17 @@ def build_application(settings: Settings, services: Services):
         MessageHandler(private & filters.Regex(rf"^{keyboards.BTN_CANCEL}$"), common.cancel)
     )
     application.add_handler(
-        MessageHandler(private & (filters.VOICE | filters.VIDEO_NOTE), media.handle_media)
+        MessageHandler(
+            private
+            & (
+                filters.VOICE
+                | filters.VIDEO_NOTE
+                | filters.AUDIO
+                | filters.Document.ALL
+                | filters.VIDEO
+            ),
+            media.handle_media,
+        )
     )
     application.add_handler(
         MessageHandler(private & filters.TEXT & ~filters.COMMAND, common.fallback)

@@ -36,13 +36,13 @@ class TranscriptionService:
 
     async def transcribe(
         self,
-        file_path: str,
+        source: str,
         file_type: str,
         language: str,
         duration: int = 0,
     ) -> Transcript | None:
-        """Распознать файл. None, если модель не расслышала текст."""
-        task = self._task(file_path, file_type, language)
+        """Распознать источник: ссылку Telegram или локальный путь."""
+        task = self._task(source, file_type, language)
         try:
             result = await asyncio.wait_for(
                 aget_result(task, backoff=1.2, max_delay=1.0, preserve=False),

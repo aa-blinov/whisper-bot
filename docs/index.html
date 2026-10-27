@@ -44,12 +44,12 @@
     <section class="hero wrap" id="top" aria-labelledby="hero-title">
       <div class="hero-copy">
         <h1 id="hero-title">Скажи голосом.<br>Прочитай текстом.</h1>
-        <p class="lede">Пришлите боту голосовое сообщение или видео-кружок, и он вернёт текст с пунктуацией и заглавными буквами. Речь распознаёт GigaAM v3 на вашем сервере: записи никуда не уходят, модель работает на той же машине, что и бот.</p>
+        <p class="lede">Пришлите боту голосовое, видео-кружок, аудиофайл или видео, и он вернёт текст с пунктуацией и заглавными буквами. Речь распознаёт GigaAM v3 на вашем сервере: записи никуда не уходят, модель работает на той же машине, что и бот.</p>
         <div class="actions">
           <a class="button" href="https://t.me/whisper_telegram_bot">Открыть в Telegram</a>
           <a class="button button-quiet" href="#install">Поставить себе</a>
         </div>
-        <p class="fine">MIT. Три контейнера, long polling, без домена и сертификата.</p>
+        <p class="fine">MIT. Четыре контейнера, long polling, без домена и сертификата.</p>
       </div>
 
       <figure class="demo" aria-describedby="demo-caption">
@@ -63,7 +63,7 @@
               <span class="chat-voice"><span class="chat-dot" aria-hidden="true"></span>0:12</span>
             </div>
             <div class="chat-row">
-              <p class="chat-status">🎧 Скачиваю запись…</p>
+              <p class="chat-status">🎧 Получил запись…</p>
             </div>
             <div class="chat-row">
               <p class="chat-status">🧠 Распознаю…</p>
@@ -83,7 +83,7 @@
         <li class="reveal">
           <div class="rail-keys" aria-hidden="true"><kbd>→</kbd><span>голосовое</span></div>
           <h3>Пришлите</h3>
-          <p>Бот принимает голосовые сообщения и видео-кружки, до 300 секунд каждое. Файл скачивается в каталог <code>data/</code> и уходит в очередь.</p>
+          <p>Бот принимает голосовые, видео-кружки, аудиофайлы и видео, до 300 секунд и 20 МБ. Файл он не копирует: берёт у Телеграма ссылку и отдаёт её воркеру, а тот читает поток через ffmpeg.</p>
         </li>
         <li class="reveal">
           <div class="rail-keys" aria-hidden="true"><kbd>ONNX</kbd><span>на CPU</span></div>
@@ -102,8 +102,8 @@
       <h2 id="does-title">Что умеет</h2>
       <div class="two">
         <div>
-          <h3>Голос и кружки</h3>
-          <p>Оба формата идут одним путём: ffmpeg сам достаёт дорожку из контейнера, поэтому отдельного шага «сделать mp3 из кружка» нет. Запись дольше лимита бот не примет и скажет, сколько секунд максимум.</p>
+          <h3>Голос, кружки и файлы</h3>
+          <p>Четыре вида медиа идут одним путём: голосовое, кружок, аудиофайл (mp3, ogg, wav, flac, m4a) и видео (mp4, webm, mkv). PDF и прочие документы бот вежливо отклоняет, а файл больше 20 МБ не просит у Телеграма вовсе.</p>
         </div>
         <div>
           <h3>Пунктуация из модели</h3>
@@ -113,7 +113,7 @@
       <div class="two">
         <div>
           <h3>История и статистика</h3>
-          <p>Каждый запрос сохраняется в SQLite: время, длительность, тип медиа, язык и сам текст. <code>/stats</code> показывает людей, запросы и новые заявки за сегодня и за неделю.</p>
+          <p>Каждый запрос сохраняется в Postgres: время, длительность, тип медиа, язык и сам текст. <code>/stats</code> показывает людей, запросы и новые заявки за сегодня и за неделю.</p>
         </div>
         <div>
           <h3>Язык на выбор</h3>
@@ -162,7 +162,7 @@
       </div>
       <p class="fine">Вес дан для файла int8 в кэше <code>data/hf</code>. Обе модели прогреваются при старте воркера, короткое голосовое возвращается примерно за секунду.</p>
       <figure class="shot reveal">
-        <img src="screenshots/chat.svg" width="960" height="640" loading="lazy" alt="Схема: голосовое сообщение попадает в бота, задача уходит в очередь Redis, воркер распознаёт её моделью GigaAM v3, текст возвращается в чат, а запись сохраняется в SQLite.">
+        <img src="screenshots/chat.svg" width="960" height="640" loading="lazy" alt="Схема: бот берёт у Telegram ссылку на файл, задача уходит в очередь Redis, воркер читает поток через ffmpeg и распознаёт моделью GigaAM v3, текст возвращается в чат, а запись сохраняется в Postgres.">
         <figcaption>Путь запроса: Telegram, Redis, воркер с моделью, ответ в чат и строка в истории.</figcaption>
       </figure>
     </section>
@@ -171,11 +171,11 @@
       <div class="split">
         <div>
           <h2 id="privacy-title">Всё на вашем сервере</h2>
-          <p>Бот ходит в Telegram и больше никуда. Распознавание идёт на CPU той машины, где стоит контейнер, история лежит в SQLite в каталоге <code>data/</code>, модель там же, в <code>data/hf</code>.</p>
+          <p>Бот ходит в Telegram и больше никуда. Распознавание идёт на CPU той машины, где стоит контейнер, история лежит в Postgres рядом, модель в томе <code>data/hf</code>.</p>
           <p>Нет ни облачной расшифровки, ни подписки, ни второго сервиса, которому уходят записи. Токен бота и <code>ADMIN_ID</code> живут в <code>.env</code>, а <code>.env</code> в <code>.gitignore</code>.</p>
         </div>
         <ul class="notes">
-          <li>Записи удаляются сразу после распознавания.</li>
+          <li>Файл не копируется на диск: воркер читает поток и держит звук в памяти.</li>
           <li>Тексты остаются в базе: это личные данные, доступ к серверу и есть доступ к ним.</li>
           <li>Модель скачивается один раз, дальше старт читает кэш из тома.</li>
           <li>Никакой аналитики и внешних запросов, кроме Telegram и однократной загрузки веса.</li>
@@ -205,6 +205,7 @@ docker compose up --build">Скопировать</button>
           <tbody>
             <tr><th scope="row"><code>TELEGRAM_BOT_TOKEN</code></th><td>Токен бота. Без него бот не стартует.</td></tr>
             <tr><th scope="row"><code>ADMIN_ID</code></th><td>Ваш числовой ID, можно несколько через запятую. Пусто: админом станет первый, кто напишет <code>/start</code>.</td></tr>
+            <tr><th scope="row"><code>DATABASE_URL</code></th><td>Строка подключения к Postgres для истории. Пароль должен совпадать с <code>POSTGRES_PASSWORD</code>.</td></tr>
             <tr><th scope="row"><code>MAX_MEDIA_SECONDS</code></th><td>Максимальная длительность записи, по умолчанию 300.</td></tr>
             <tr><th scope="row"><code>ASR_MODEL</code></th><td>Модель для русского, по умолчанию <code>gigaam-v3-e2e-ctc</code>.</td></tr>
             <tr><th scope="row"><code>REDIS_HOST</code></th><td>Адрес очереди. В Compose это имя сервиса <code>redis</code>.</td></tr>
@@ -214,7 +215,7 @@ docker compose up --build">Скопировать</button>
       <div class="install-notes">
         <div>
           <h3>Проверить</h3>
-          <p><code>docker compose ps</code>: три сервиса, redis healthy, бот и воркер healthy после прогрева моделей. Первый старт скачивает 214 МБ русской модели и 107 МБ английской в <code>data/hf</code>, дальше берёт их оттуда.</p>
+          <p><code>docker compose ps</code>: четыре сервиса, redis и postgres healthy, бот и воркер healthy после прогрева моделей. Первый старт скачивает 214 МБ русской модели и 107 МБ английской в <code>data/hf</code>, дальше берёт их оттуда.</p>
         </div>
         <div>
           <h3>Обновить</h3>

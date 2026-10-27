@@ -29,10 +29,10 @@
 
   <rect class="card" x="60" y="200" width="420" height="86" rx="8"/>
   <text class="meta soft" x="84" y="232">бот</text>
-  <text class="label ink" x="84" y="265">скачал файл</text>
+  <text class="label ink" x="84" y="265">взял ссылку</text>
 
   <rect class="card" x="640" y="200" width="260" height="86" rx="8"/>
-  <text class="meta soft" x="664" y="232">sqlite</text>
+  <text class="meta soft" x="664" y="232">postgres</text>
   <text class="label ink" x="664" y="265">история</text>
 
   <rect class="card" x="60" y="320" width="420" height="86" rx="8"/>
@@ -40,8 +40,8 @@
   <text class="label ink" x="84" y="385">очередь задач</text>
 
   <rect class="card" x="60" y="440" width="420" height="86" rx="8"/>
-  <text class="meta soft" x="84" y="472">воркер, cpu</text>
-  <text class="label ink" x="84" y="505">GigaAM v3 e2e CTC</text>
+  <text class="meta soft" x="84" y="472">воркер, cpu, 2 потока</text>
+  <text class="label ink" x="84" y="505">ffmpeg + GigaAM v3</text>
 
   <rect class="card" x="640" y="440" width="260" height="86" rx="8"/>
   <text class="meta soft" x="664" y="472">чат</text>
@@ -59,5 +59,5 @@
     </marker>
   </defs>
 
-  <text class="note soft" x="60" y="586">файл удаляется после распознавания, в базе остаётся текст</text>
+  <text class="note soft" x="60" y="586">файл не копируется: воркер читает поток и держит звук в памяти</text>
 </svg>

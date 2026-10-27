@@ -8,8 +8,8 @@ adaptive
 
 The bot lives inside Telegram, so the client is whatever the person already
 has: the Telegram app on a phone, the desktop client, or the web client. The
-deployment side is three Linux containers on one host: the bot, one worker,
-and Redis.
+deployment side is four Linux containers on one host: the bot, two worker
+threads, Postgres for the history, and Redis for the queue.
 
 ## Users
 
@@ -42,32 +42,33 @@ the last seven days.
 ## Positioning
 
 The transcription runs in a container the owner controls, on the CPU, with
-the model cached on a disk the owner owns and the history in a SQLite file
-that any SQLite client can read. A hosted transcription service cannot be
-run that way.
+the model cached on a disk the owner owns and the history in a Postgres
+database that any Postgres client can read. A hosted transcription service
+cannot be run that way.
 
 The second difference is where the answer arrives. A desktop dictation
 application puts the text into whatever window is in front of the person, and
 a mobile one asks for a recording and an export. This one answers a message
 that was sent to a bot, in the conversation where it was sent.
 
-The third is how the deployment is put together: one host, three containers, a
-bind mount for the data and a queue between the conversation and the CPU.
-That is more machinery than a single script, and it is what keeps the bot
-answering while the model is busy.
+The third is how the deployment is put together: one host, four containers, a
+queue between the conversation and the CPU, and a small Postgres for the
+history. That is more machinery than a single script, and it is what keeps
+the bot answering while the model is busy.
 
 ## Operating Context
 
 The person using the bot is in Telegram, in a private chat with the bot, and
-has just sent a voice message. The bot edits one status message under it
-while the transcription runs, and replies with the transcript when it is
-done. Nobody leaves the chat and nobody opens a second application.
+has just sent a voice message, a round video, an audio file or a video file.
+The bot edits one status message under it while the transcription runs, and
+replies with the transcript when it is done. Nobody leaves the chat and
+nobody opens a second application.
 
 The administrator is somewhere else, on the host, with Docker. They start the
-three containers, they keep the token and the administrator id in `.env`, and
-they add people to the allowlist by Telegram id. The allowlist is in SQLite,
-and the bot refuses everybody who is not on it, including a person who has
-just started a chat with it.
+four containers, they keep the token and the administrator id in `.env`, and
+they add people to the allowlist by Telegram id. The allowlist is in
+Postgres, and the bot refuses everybody who is not on it, including a person
+who has just started a chat with it.
 
 The deployment is long polling: the bot connects out to Telegram and asks for
 updates. There is no incoming traffic, no domain name and no certificate to
@@ -77,8 +78,9 @@ keep.
 
 Confirmed by the code:
 
-- A voice message and a video note are transcribed, and nothing else is
-  accepted.
+- A voice message, a video note, an audio file and a video file are
+  transcribed, up to 300 seconds and 20 MB; a PDF or another document is
+  refused with a sentence, and a bigger file is refused before any download.
 - The recognition language is Russian or English, chosen by the person, and
   it falls back to Russian.
 - The transcript arrives punctuated and capitalised: Russian is recognised by
@@ -86,13 +88,17 @@ Confirmed by the code:
   ONNX model.
 - The transcription runs on the CPU with ONNX Runtime, on models cached in
   `data/hf`.
+- The file is not copied to disk: the bot passes Telegram's file URL to the
+  worker and ffmpeg streams it over HTTPS.
 - The bot keeps answering while the transcription runs, because the work is
-  on a Huey queue and the bot waits for the result.
+  on a Huey queue and the bot waits for the result. Two worker threads share
+  the loaded models.
 - Nothing leaves the host. There is no correction by a language model and no
-  cloud call: the transcript goes from the worker to the chat and to SQLite.
+  cloud call: the transcript goes from the worker to the chat and to Postgres.
 - Every finished transcription is stored with its timestamp, its wall-clock
   duration, the kind of media, the language and the text.
-- The allowed people and the request history live in SQLite at `DB_PATH`.
+- The allowed people and the request history live in Postgres at
+  `DATABASE_URL`; removing a person keeps their rows without an owner.
 - The administrator adds a person by numeric id, by `@username`, by forwarding
   one of their messages, or by tapping **Allow** on the request that arrives
   when a stranger writes `/start`. Removal is a button in the person's card,
@@ -110,17 +116,17 @@ Deliberately not true, and worth knowing before a change:
 - The language is never detected. The person says which one it is.
 - The duration in the history covers the whole round trip, not the length of
   the recording.
-- The foreign key from `tasks.user_id` to `users.user_id` is not enforced, so
-  removing a person leaves their rows behind.
-- The repository carries no continuous integration, no working test and no
-  screenshot. The one test file is empty.
+- Removing a person keeps their request rows: the foreign key is
+  `ON DELETE SET NULL`, so the history survives without an owner.
+- The repository has CI and a project page, but no working unit test suite:
+  `tests/test_bot.py` is empty, and the end-to-end check is a script that
+  needs the stack running.
 
 ## Brand Commitments
 
-**Name:** Whisper STT bot. **Tone:** plain and technical, in Russian. The
+**Name:** Lazy to Text bot. **Tone:** plain and technical, in Russian. The
 replies say what happened: the file was received, the transcription is
-running, the text was corrected, the text could not be recognised. They do
-not congratulate anybody.
+running, the text could not be recognised. They do not congratulate anybody.
 
 **Language:** the interface is Russian. The documents are English, because
 they are read by whoever finds the link to the repository, and the two are
@@ -147,8 +153,8 @@ conversation.
   behind `/stats`.
 - `requirements.txt` pins every dependency, and the Dockerfile installs
   ffmpeg, libsndfile1 and libgomp1.
-- `docker-compose.yml` names the three services and the shared `./data`
-  volume.
+- `docker-compose.yml` names the four services, the `pgdata` volume and the
+  shared `./data` volume for the model cache.
 - `.env.example` holds the variables and their default values.
 - The GitHub repository has one star, one fork, one watcher and one open
   issue, and its description is empty.

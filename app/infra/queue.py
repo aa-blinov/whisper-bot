@@ -12,7 +12,6 @@ import logging
 from huey import RedisExpireHuey
 
 from app.config import Settings
-from app.infra.media import MediaStorage
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +31,14 @@ huey = RedisExpireHuey(
 
 
 @huey.task()
-def transcribe_task(file_path: str, file_type: str, language: str = "ru"):
-    """Распознать файл и удалить его с диска в любом исходе."""
-    from app.infra.asr import Recognizer  # ленивый импорт: модель грузит только воркер
+def transcribe_task(source: str, file_type: str, language: str = "ru"):
+    """Распознать файл по ссылке Telegram или по локальному пути.
+
+    Ссылка живёт около часа и содержит токен бота, поэтому её нельзя
+    логировать; в задаче она только передаётся в ffmpeg.
+    """
     from app.config import Settings as _Settings
+    from app.infra.asr import Recognizer  # ленивый импорт: модель грузит только воркер
 
     settings = _Settings.from_env()
     recognizer = Recognizer(
@@ -44,14 +47,4 @@ def transcribe_task(file_path: str, file_type: str, language: str = "ru"):
         settings.asr_quantization,
         settings.asr_threads,
     )
-    try:
-        return recognizer.transcribe_file(file_path, language=language)
-    except Exception:
-        logger.exception("Ошибка обработки файла %s", file_path)
-        raise
-    finally:
-        storage = MediaStorage(settings.data_dir)
-        storage.remove(file_path)
-        # Видео-кружок раньше превращался в отдельный mp3; подчищаем и его,
-        # если файл остался от прошлых версий.
-        storage.remove(file_path + ".mp3")
+    return recognizer.transcribe_source(source, language=language)

@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class AccessService:
-    def __init__(self, db_path: str, admin_ids: tuple[int, ...] = ()) -> None:
-        self.db_path = db_path
+    def __init__(self, database_url: str, admin_ids: tuple[int, ...] = ()) -> None:
+        self.database_url = database_url
         self.admin_ids = tuple(admin_ids)
 
     # --- вопросы ----------------------------------------------------------
@@ -28,34 +28,34 @@ class AccessService:
             return False
         if user_id in self.admin_ids:
             return True
-        user = database.get_user(self.db_path, user_id)
+        user = database.get_user(self.database_url, user_id)
         return bool(user and user.is_admin)
 
     def is_allowed(self, user_id: int | None) -> bool:
         if user_id is None:
             return False
-        return database.get_user(self.db_path, user_id) is not None
+        return database.get_user(self.database_url, user_id) is not None
 
     def has_admin(self) -> bool:
         """Есть ли хоть один админ: в окружении или в базе."""
-        return bool(self.admin_ids) or database.has_admins(self.db_path)
+        return bool(self.admin_ids) or database.has_admins(self.database_url)
 
     def admins(self) -> list[int]:
         """Все админы: из окружения и из базы, без повторов."""
         found = list(dict.fromkeys(self.admin_ids))
-        for user in database.list_users(self.db_path):
+        for user in database.list_users(self.database_url):
             if user.is_admin and user.user_id not in found:
                 found.append(user.user_id)
         return found
 
     def count(self) -> int:
-        return database.count_users(self.db_path)
+        return database.count_users(self.database_url)
 
     def all(self) -> list[User]:
-        return database.list_users(self.db_path)
+        return database.list_users(self.database_url)
 
     def get(self, user_id: int) -> User | None:
-        return database.get_user(self.db_path, user_id)
+        return database.get_user(self.database_url, user_id)
 
     # --- изменения --------------------------------------------------------
 
@@ -64,7 +64,7 @@ class AccessService:
     ) -> None:
         """Обновить имя и username, если человек их сменил в Telegram."""
         database.add_user(
-            self.db_path,
+            self.database_url,
             user_id,
             first_name=first_name,
             last_name=last_name,
@@ -81,7 +81,7 @@ class AccessService:
     ) -> bool:
         """Выдать доступ. True, если человек появился в списке впервые."""
         return database.add_user(
-            self.db_path,
+            self.database_url,
             user_id,
             is_admin=is_admin,
             first_name=first_name,
@@ -90,7 +90,7 @@ class AccessService:
         )
 
     def revoke(self, user_id: int) -> bool:
-        return database.remove_user(self.db_path, user_id)
+        return database.remove_user(self.database_url, user_id)
 
     def claim_first_admin(self, user_id: int, **profile) -> bool:
         """Пока админа нет ни в `.env`, ни в базе, первый написавший становится им.
@@ -98,7 +98,7 @@ class AccessService:
         True, если запись действительно удалась: если база не пишется,
         вызывающий не должен считать человека админом.
         """
-        if self.admin_ids or database.has_admins(self.db_path):
+        if self.admin_ids or database.has_admins(self.database_url):
             return False
         granted = self.grant(user_id, is_admin=True, **profile)
         if not granted:
@@ -110,8 +110,8 @@ class AccessService:
     # --- язык -------------------------------------------------------------
 
     def language(self, user_id: int, default: str = "ru") -> str:
-        user = database.get_user(self.db_path, user_id)
+        user = database.get_user(self.database_url, user_id)
         return (user.language if user else None) or default
 
     def set_language(self, user_id: int, language: str) -> None:
-        database.set_language(self.db_path, user_id, language)
+        database.set_language(self.database_url, user_id, language)

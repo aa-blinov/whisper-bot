@@ -7,11 +7,11 @@ from app.infra import database
 
 
 class StatsService:
-    def __init__(self, db_path: str) -> None:
-        self.db_path = db_path
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
 
     def overview(self) -> Stats:
-        return database.stats(self.db_path)
+        return database.stats(self.database_url)
 
     def record(
         self,
@@ -22,5 +22,5 @@ class StatsService:
         language: str | None = None,
     ) -> None:
         database.record_task(
-            self.db_path, user_id, duration_seconds, file_type, text, language
+            self.database_url, user_id, duration_seconds, file_type, text, language
         )

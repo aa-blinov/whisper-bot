@@ -55,7 +55,7 @@ class Settings:
     token: str | None
     admin_ids: tuple[int, ...] = ()
     data_dir: str = "data"
-    db_path: str = "data/bot_database.db"
+    database_url: str = "postgresql://lazy:lazy@postgres:5432/lazy"
 
     redis_host: str = "redis"
     redis_port: int = 6379
@@ -76,15 +76,16 @@ class Settings:
     def from_env(cls) -> "Settings":
         """Собрать настройки из окружения с безопасными значениями."""
         data_dir = os.getenv("DATA_DIR", "data").strip() or "data"
-        db_path = os.getenv("DB_PATH", "").strip() or os.path.join(
-            data_dir, "bot_database.db"
+        database_url = (
+            os.getenv("DATABASE_URL", "").strip()
+            or "postgresql://lazy:lazy@postgres:5432/lazy"
         )
 
         return cls(
             token=(os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() or None,
             admin_ids=_int_list(os.getenv("ADMIN_ID")),
             data_dir=data_dir,
-            db_path=db_path,
+            database_url=database_url,
             redis_host=os.getenv("REDIS_HOST", "redis").strip() or "redis",
             redis_port=_int(os.getenv("REDIS_PORT"), 6379),
             redis_db=_int(os.getenv("REDIS_DB"), 0),

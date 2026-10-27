@@ -1,9 +1,39 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: lazy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lazy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lazy}
+      POSTGRES_DB: ${POSTGRES_DB:-lazy}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lazy} -d ${POSTGRES_DB:-lazy}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7-alpine
     container_name: lazy-redis
     restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    # volatile-lru вытесняет только ключи с TTL (результаты задач), а
+    # очередь без TTL остаётся на месте. AOF переживает перезапуск Redis.
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - "256mb"
+      - --maxmemory-policy
+      - volatile-lru
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -22,6 +52,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -34,6 +65,8 @@ services:
       start_period: 30s
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   huey-worker:
@@ -49,8 +82,9 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - HUEY_WORKER_COUNT=1
-      - HUEY_WORKER_TYPE=process
+      # Два потока на один процесс: модели общие, память не удваивается.
+      - HUEY_WORKER_COUNT=2
+      - HUEY_WORKER_TYPE=thread
     volumes:
       - ./data:/app/data
     healthcheck:
@@ -64,3 +98,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+volumes:
+  pgdata:

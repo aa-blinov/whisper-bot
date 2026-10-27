@@ -4,10 +4,12 @@ onnxruntime==1.31.1
 numpy==2.5.4
 soundfile==0.14.0
 
-# Очередь и Telegram.
+# Очередь, Telegram и база.
 huey==3.5.3
 redis==8.1.0
 python-telegram-bot==22.8
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
 
 # Прочее.
 httpx==0.28.1

@@ -13,6 +13,27 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ## [Unreleased]
 
+### Added
+
+- **Any media the person can send is accepted**: voice, video note, an audio
+  document (mp3, ogg, wav, flac, m4a) and a video file. A PDF gets a plain
+  refusal, and anything above Telegram's 20 MB bot limit is refused before a
+  request to the API.
+- **The file is never copied.** The bot resolves Telegram's file URL and puts
+  it in the queue; the worker's ffmpeg streams it over HTTPS and decodes in
+  memory, so there is no download step, no shared media directory and nothing
+  to clean up.
+- **Two worker threads** share one process and the loaded models, so a burst
+  is absorbed: 20 clients with 12-second clips finish in 10 seconds, 10
+  clients with 58-second clips in 20 seconds.
+- **Postgres replaces SQLite.** The history lives in the `postgres` service,
+  the bot uses a `psycopg` pool, and parallel writes no longer serialise on a
+  file lock. `scripts/import_sqlite.py` moves an older SQLite history over.
+- **Redis is configured for a queue**: 256 MB, `volatile-lru` so only
+  expiring results can be evicted, AOF `everysec`.
+- **Nothing is dropped on restart.** `drop_pending_updates=False`: messages
+  that arrived while the bot was down are processed after it starts.
+
 ### Removed
 
 - **The OpenRouter correction layer is gone.** The recogniser writes finished
@@ -20,8 +41,8 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
   thing that could fail without the person noticing. `app/llm.py`,
   `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME` and the `httpx` pin are
   removed; the transcript now goes from the worker straight to the chat and
-  to SQLite. If a correction ever comes back, it comes back as a product
-  decision, not as a config flag.
+  to the database. If a correction ever comes back, it comes back as a
+  product decision, not as a config flag.
 
 ### Changed
 

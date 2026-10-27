@@ -192,6 +192,22 @@ class Recognizer:
             logger.warning("Файл не содержит звука: %s", path)
         return buf
 
+    def transcribe_source(
+        self, source: str, language: str = "ru"
+    ) -> tuple[str | None, str | None]:
+        """Распознать локальный файл или ссылку Telegram.
+
+        Ссылку ffmpeg читает сам, поэтому копии файла на диске нет. Логи
+        не должны печатать источник: в ссылке лежит токен бота.
+        """
+        if source.startswith(("http://", "https://")):
+            audio = self._decode_with_ffmpeg(source)
+            if audio is None:
+                logger.error("Не удалось прочитать аудио по ссылке Telegram")
+                return None, None
+            return self.transcribe_audio(audio, language=language)
+        return self.transcribe_file(source, language=language)
+
     # --- распознавание ----------------------------------------------------
 
     @staticmethod

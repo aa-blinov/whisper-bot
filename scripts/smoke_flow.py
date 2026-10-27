@@ -3,7 +3,8 @@
 Подменяет сетевые методы `Bot`, прогоняет настоящие `Update` через
 `Application.process_update` и проверяет базу и отправленные сообщения.
 Распознавание при этом настоящее: файл уходит в Huey, воркер в соседнем
-контейнере возвращает текст.
+контейнере возвращает текст. База своя: скрипт создаёт `lazy_smoke`,
+поэтому боевые данные не трогает.
 
 Запуск внутри контейнера:
     docker compose cp scripts/smoke_flow.py lazy-to-text-bot:/app/smoke_flow.py
@@ -14,21 +15,42 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import sys
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 
-os.environ["DB_PATH"] = "data/smoke.db"
-os.environ["DATA_DIR"] = "data"
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SMOKE_DB = "lazy_smoke"
+
+
+def _prepare_database() -> str:
+    """Отдельная база для проверки: боевую не трогаем."""
+    import psycopg
+
+    base = os.environ.get("DATABASE_URL") or "postgresql://lazy:lazy@postgres:5432/lazy"
+    server, _, _name = base.rpartition("/")
+    with psycopg.connect(f"{server}/postgres", autocommit=True) as conn:
+        conn.execute(f"DROP DATABASE IF EXISTS {SMOKE_DB} WITH (FORCE)")
+        conn.execute(f"CREATE DATABASE {SMOKE_DB}")
+    smoke_url = f"{server}/{SMOKE_DB}"
+    os.environ["DATABASE_URL"] = smoke_url
+    return smoke_url
+
+
+SMOKE_URL = _prepare_database()
 # Проверяем сценарий «админа ещё нет»: первый /start забирает роль.
 os.environ["ADMIN_ID"] = ""
+os.environ["DATA_DIR"] = "data"
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:SMOKE-TEST-TOKEN")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from telegram import Bot, InlineKeyboardMarkup, Update, User, Voice  # noqa: E402
+from telegram import Bot, Document, InlineKeyboardMarkup, Update, User, Voice  # noqa: E402
 
+from app.bot import app as bot_app  # noqa: E402
 from app.bot.app import build_application  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.container import build_services  # noqa: E402
@@ -115,16 +137,9 @@ def callback_update(user_id: int, data: str) -> dict:
 async def run() -> None:
     has_audio = os.path.exists(SAMPLE)
     if not has_audio:
-        print(f"нет файла {SAMPLE}: шаг с распознаванием будет пропущен")
+        print(f"нет файла {SAMPLE}: шаги с распознаванием будут пропущены")
 
-    # Прогон должен быть повторяемым: иначе пользователи из прошлого
-    # запуска делают проверки заявки и списка ложно-красными.
-    try:
-        os.remove(settings.db_path)
-    except FileNotFoundError:
-        pass
-
-    database.init_db(settings.db_path, settings.admin_ids)
+    database.init_db(settings.database_url, settings.admin_ids)
     application = build_application(settings, build_services(settings))
     bot = application.bot
     update_id = 0
@@ -161,17 +176,28 @@ async def run() -> None:
         ("set_my_description", AsyncMock(return_value=True)),
         ("get_user_profile_photos", AsyncMock(return_value=type("P", (), {"total_count": 1})())),
         ("set_my_profile_photo", AsyncMock(return_value=True)),
+        ("get_my_name", AsyncMock(return_value=type("N", (), {"name": bot_app.BOT_NAME})())),
+        (
+            "get_my_description",
+            AsyncMock(
+                return_value=type("D", (), {"description": bot_app.DESCRIPTION})()
+            ),
+        ),
+        (
+            "get_my_short_description",
+            AsyncMock(
+                return_value=type(
+                    "S", (), {"short_description": bot_app.SHORT_DESCRIPTION}
+                )()
+            ),
+        ),
         ("get_me", fake_get_me),
     ):
         stack.enter_context(patch.object(Bot, name, new=mock))
 
     async def fake_get_file(self, *args, **kwargs):
-        class FakeFile:
-            async def download_to_drive(self, custom_path=None, *a, **k):
-                shutil.copy(SAMPLE, custom_path)
-                return custom_path
-
-        return FakeFile()
+        """Вместо ссылки Telegram отдаём локальный путь на общем томе."""
+        return type("F", (), {"file_path": SAMPLE, "file_size": 69984})()
 
     await application.initialize()
 
@@ -185,8 +211,11 @@ async def run() -> None:
         # 1. Первый /start становится админом.
         print("1. /start без ADMIN_ID")
         await process({"message": base_message(ADMIN_ID, 1, text="/start")})
-        check(database.get_user(settings.db_path, ADMIN_ID) is not None, "первый допущен")
-        check(bool(database.get_user(settings.db_path, ADMIN_ID).is_admin), "он администратор")
+        check(database.get_user(settings.database_url, ADMIN_ID) is not None, "первый допущен")
+        check(
+            bool(database.get_user(settings.database_url, ADMIN_ID).is_admin),
+            "он администратор",
+        )
         check(any("Привет" in text for text in texts()), "пришло приветствие")
 
         # 2. Панель с inline-кнопками.
@@ -210,7 +239,10 @@ async def run() -> None:
         await process({"message": base_message(ADMIN_ID, 4, text=str(GUEST_ID))})
         check(any("Добавить этого человека" in text for text in texts()), "пришла карточка")
         await process(callback_update(ADMIN_ID, f"add:{GUEST_ID}"))
-        check(database.get_user(settings.db_path, GUEST_ID) is not None, "пользователь в базе")
+        check(
+            database.get_user(settings.database_url, GUEST_ID) is not None,
+            "пользователь в базе",
+        )
         check(
             any(chat == GUEST_ID for chat, _, _ in sent),
             "новому пользователю отправлено приветствие",
@@ -229,7 +261,10 @@ async def run() -> None:
         print("5. Удаление доступа")
         await process(callback_update(ADMIN_ID, f"user:{GUEST_ID}:del"))
         await process(callback_update(ADMIN_ID, f"user:{GUEST_ID}:del:yes"))
-        check(database.get_user(settings.db_path, GUEST_ID) is None, "доступ убран")
+        check(
+            database.get_user(settings.database_url, GUEST_ID) is None,
+            "доступ убран",
+        )
 
         # 6. Заявка от нового человека и разрешение одним нажатием.
         print("6. Заявка на доступ")
@@ -241,7 +276,7 @@ async def run() -> None:
         )
         await process(callback_update(ADMIN_ID, f"req:{NEWCOMER_ID}:allow"))
         check(
-            database.get_user(settings.db_path, NEWCOMER_ID) is not None,
+            database.get_user(settings.database_url, NEWCOMER_ID) is not None,
             "заявка одобрена",
         )
 
@@ -252,11 +287,11 @@ async def run() -> None:
         check(any("язык" in text.lower() for text in texts()), "меню языка показано")
         await process({"message": base_message(ADMIN_ID, 31, text="🇷🇺 Русский")})
         check(
-            database.get_user(settings.db_path, ADMIN_ID).language == "ru",
+            database.get_user(settings.database_url, ADMIN_ID).language == "ru",
             "язык сохранён в базе",
         )
 
-        # 8. Голосовое сообщение: скачивание подменено, распознавание настоящее.
+        # 8. Голосовое сообщение: ссылка подменена, распознавание настоящее.
         print("8. Голосовое сообщение → текст (настоящий воркер)")
         if has_audio:
             sent.clear()
@@ -271,7 +306,9 @@ async def run() -> None:
                     "file_size": 69984,
                 },
             )
-            with patch.object(Voice, "get_file", fake_get_file):
+            with patch.object(Voice, "get_file", fake_get_file), patch(
+                "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE
+            ):
                 await process({"message": voice_message})
 
             transcript = [text for text in texts() if "<pre>" in text]
@@ -282,16 +319,76 @@ async def run() -> None:
                 check("Привет" in body, "текст распознан")
                 check("." in body and "," in body, "пунктуация на месте")
             check(
-                database.stats(settings.db_path).today_requests >= 1,
+                database.stats(settings.database_url).today_requests >= 1,
                 "запрос записан в историю",
             )
         else:
             print("  skip  нет файла для распознавания")
 
-        # 9. Посторонний текст не ломает бота.
-        print("9. Посторонний текст")
+        # 9. Аудиофайл документом: mp3 приходит как document.
+        print("9. MP3 документом")
+        if has_audio:
+            sent.clear()
+            document_message = base_message(
+                ADMIN_ID,
+                60,
+                document={
+                    "file_id": "smoke-doc",
+                    "file_unique_id": "smoke-doc-unique",
+                    "file_name": "note.mp3",
+                    "mime_type": "audio/mpeg",
+                    "file_size": 69984,
+                },
+            )
+            with patch.object(Document, "get_file", fake_get_file), patch(
+                "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE
+            ):
+                await process({"message": document_message})
+            check(
+                any("<pre>" in text and "Привет" in text for text in texts()),
+                "mp3-документ распознан",
+            )
+        else:
+            print("  skip  нет файла")
+
+        # 10. Не медиа документом: понятный отказ, без распознавания.
+        print("10. PDF документом")
         sent.clear()
-        await process({"message": base_message(ADMIN_ID, 50, text="просто текст")})
+        pdf_message = base_message(
+            ADMIN_ID,
+            70,
+            document={
+                "file_id": "smoke-pdf",
+                "file_unique_id": "smoke-pdf-unique",
+                "file_name": "report.pdf",
+                "mime_type": "application/pdf",
+                "file_size": 1234,
+            },
+        )
+        await process({"message": pdf_message})
+        check(any("не похоже" in text.lower() for text in texts()), "PDF отклонён")
+
+        # 11. Файл больше лимита: отказ до запроса к Telegram.
+        print("11. Файл больше 20 МБ")
+        sent.clear()
+        big_message = base_message(
+            ADMIN_ID,
+            80,
+            audio={
+                "file_id": "smoke-big",
+                "file_unique_id": "smoke-big-unique",
+                "duration": 100,
+                "mime_type": "audio/mpeg",
+                "file_size": 25 * 1024 * 1024,
+            },
+        )
+        await process({"message": big_message})
+        check(any("20 МБ" in text for text in texts()), "большой файл отклонён")
+
+        # 12. Посторонний текст не ломает бота.
+        print("12. Посторонний текст")
+        sent.clear()
+        await process({"message": base_message(ADMIN_ID, 90, text="просто текст")})
         check(
             any("голосовое" in text.lower() for text in texts()),
             "бот объяснил, что прислать",
@@ -299,6 +396,7 @@ async def run() -> None:
     finally:
         await application.shutdown()
         stack.close()
+        database.close_all()
 
     print()
     if failures:

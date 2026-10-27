@@ -36,9 +36,10 @@ TELEGRAM_BOT_TOKEN=123456:replace-with-the-token-from-botfather
 ADMIN_ID=123456789
 ```
 
-Three containers start: `redis` for the queue, `lazy-to-text-bot` for the
-conversation, and `huey-worker` for the transcription. The bot uses long
-polling, so the host needs no domain name and no certificate.
+Four containers start: `postgres` for the history, `redis` for the queue,
+`lazy-to-text-bot` for the conversation, and `huey-worker` for the
+transcription. The bot uses long polling, so the host needs no domain name and
+no certificate.
 
 `docker compose ps` shows `healthy` only when a container is actually ready:
 the worker after both models have run, the bot after its profile is set. On a
@@ -68,18 +69,22 @@ the file.
 
 ## What it does
 
-- **Transcribes voice messages and video notes.** A voice message and a round
-  video message both become text, in the language the user picked.
+- **Transcribes voice messages, video notes, audio files and video files.** A
+  voice message, a round video message, an mp3/ogg/wav/flac/m4a document and
+  an mp4/webm video all become text, in the language the user picked.
+- **Never copies the file to disk.** The bot asks Telegram for the file URL
+  and hands it to the worker; ffmpeg reads the stream over HTTPS and decodes
+  it in memory. Nothing is written to the shared volume.
 - **Writes with punctuation.** The Russian model is GigaAM v3 e2e, which emits
   punctuation, capital letters and normalised numbers by itself. No second
   punctuation step and no cloud call in the middle.
 - **Answers in the same chat.** The reply lands under the message, and the
   status line under it is edited while the transcription runs. The transcript
   is a `<pre>` block, so every Telegram client offers its copy button.
-- **Keeps answering while it works.** The audio is queued, so a slow
-  transcription never blocks the next message.
-- **Remembers every request.** Each finished transcription is stored in SQLite
-  with the time it took, the kind of media, the language and the text.
+- **Keeps answering while it works.** The audio is queued, and two worker
+  threads share the loaded models, so a burst is absorbed instead of refused.
+- **Remembers every request.** Each finished transcription is stored in
+  Postgres with the time it took, the kind of media, the language and the text.
 - **Keeps the list of allowed users.** The administrator adds a person by id,
   by `@username`, by forwarded message, or by tapping "Allow" on the request
   that arrives when somebody new sends `/start`.
@@ -110,61 +115,58 @@ The `/invite` command gives the `https://t.me/<bot>` link to forward.
 ## How it works
 
 ```
-voice message or video note
-  -> app/bot/handlers/media.py: download to data/<uuid hex>_<type>.bin
-  -> Redis: Huey task transcribe_task(path, type, language)
+voice message, round video, audio file or video file
+  -> app/bot/handlers/media.py: ask Telegram for the file URL (getFile)
+  -> Redis: Huey task transcribe_task(url, type, language)
   -> app/infra/queue.py -> app/infra/asr.py
-       soundfile or ffmpeg -> 16 kHz mono float32
+       ffmpeg reads the URL over HTTPS -> 16 kHz mono float32
        GigaAM v3 e2e CTC (ONNX) on the CPU, 25 s chunks
   -> Redis: the result
-  -> app/bot/handlers/media.py: the reply in the chat
+  -> app/bot/handlers/media.py: the reply, then a row in Postgres
 ```
 
-The bot and the worker are separate containers, and they meet twice: in the
-`data` directory, where the bot leaves the downloaded file and the worker
-deletes it after the transcription, and in Redis, where the task and its
-result travel.
+The bot and the worker are separate containers. Nothing is written to the
+shared `data` volume for a request: the worker pulls the stream from Telegram
+itself, so there is no download step in the bot and no file to clean up. The
+`data` volume still holds the model cache for the worker.
 
-The worker is one process by default. `docker-compose.yml` sets
-`HUEY_WORKER_COUNT=1` and `HUEY_WORKER_TYPE=process`, and every worker
-process loads its own copy of the model, so the number of workers is also the
-number of copies of the model in memory.
-
-A voice message and a video note go through the same path: the file is saved
-as `.bin`, and ffmpeg finds the audio track inside whatever the container is.
-There is no intermediate MP3 and no `pydub`.
+The worker runs two threads in one process: `HUEY_WORKER_COUNT=2` and
+`HUEY_WORKER_TYPE=thread`. Threads share the loaded models, so the second
+worker costs memory for the audio buffer, not another 700 MB of weights. A
+process worker would hold its own copy.
 
 The bot waits for the result with `aget_result` and edits one status message
-while it waits: "Скачиваю запись…", then "Распознаю речь…". A long transcript
-is split into several messages, because Telegram caps a message at 4096
+while it waits: "Получил запись…", then "Распознаю…". A long transcript is
+split into several messages, because Telegram caps a message at 4096
 characters.
 
-The database is SQLite, at `DB_PATH` or `data/bot_database.db`. It has two
-tables. `users` holds the allowed ids with their names, the chosen language
-and the day they were added; `tasks` holds one row per finished transcription:
-the timestamp, the duration, the kind of media, the language and the text. An
-older database gains the missing columns on the next start.
+The database is Postgres (`DATABASE_URL`, the `postgres` service in Compose).
+It has two tables. `users` holds the allowed ids with their names, the chosen
+language and the day they were added; `tasks` holds one row per finished
+transcription: the timestamp, the duration, the kind of media, the language
+and the text. Removing a person keeps their rows: the foreign key is
+`ON DELETE SET NULL`. A database from an older release can be moved over with
+`scripts/import_sqlite.py`.
 
 ## Capacity
 
-Measured on one worker, one CPU, with the stack under load:
+Measured on two worker threads, with the stack under load:
 
 | Load | Wall time | Last answer |
 | --- | --- | --- |
-| 8 clients, 12 s audio each | 10 s | 10 s |
-| 20 clients, 12 s audio each | 23 s | 23 s |
-| 4 clients, 58 s audio each | 12 s | 12 s |
-| 10 clients, 58 s audio each | 29 to 53 s | 29 to 53 s |
+| 8 clients, 12 s audio each | 3.3 s | 3.3 s |
+| 20 clients, 12 s audio each | 10 s | 10 s |
+| 10 clients, 58 s audio each | 20 s | 20 s |
 
-The worker transcribes one file at a time, so a burst queues up instead of
-failing; the bot waits up to 120 seconds. A one-minute message takes 2.6 to
-5 seconds of worker time depending on what else runs on the host. To serve
-more at once, raise `HUEY_WORKER_COUNT` and use `HUEY_WORKER_TYPE=thread`:
+A burst queues up instead of failing; the bot waits up to 120 seconds. A
+one-minute message takes 2.6 to 5 seconds of worker time depending on what
+else runs on the host. To serve more at once, raise `HUEY_WORKER_COUNT`:
 threads share the loaded models, process workers take about 700 MB each.
 
-The Telegram side does not block: downloads are async, and the burst above
-held the event loop to 50 to 90 ms of lag, all of it SQLite writes. The
-database runs in WAL mode with one reused connection for that reason.
+The Telegram side does not block: downloads happen inside the worker, and the
+burst above held the bot event loop to about 40 ms of lag, all of it Postgres
+writes. Postgres takes them without a lock and the pool is shared by the
+process.
 
 ## Configuration
 
@@ -175,31 +177,33 @@ starts. `.env.example` holds the same list with the values filled in.
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | none | The token from BotFather. Without it the bot logs the error and exits. |
 | `ADMIN_ID` | none | Numeric Telegram id of the administrator, or several separated by commas. Empty means the first `/start` claims the role. |
-| `DB_PATH` | `data/bot_database.db` | The SQLite file, relative to the working directory. |
-| `DATA_DIR` | `data` | Where downloaded media and the model cache live. |
+| `DATABASE_URL` | `postgresql://lazy:lazy@postgres:5432/lazy` | Postgres connection string for the history. |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `lazy` | Credentials for the `postgres` service; keep them in step with `DATABASE_URL`. |
+| `DATA_DIR` | `data` | Where the worker keeps the model cache. |
 | `MAX_MEDIA_SECONDS` | `300` | The longest recording the bot accepts. |
 | `REDIS_HOST` | `redis` | Queue host. Compose sets it to the service name. |
 | `REDIS_PORT` | `6379` | Queue port. |
 | `REDIS_DB` | `0` | Queue database number. |
+| `RESULT_TTL_SECONDS` | `3600` | How long a result stays in Redis if nobody reads it. |
 | `ASR_MODEL` | `gigaam-v3-e2e-ctc` | The ONNX model that handles Russian. |
 | `ASR_MODEL_EN` | `whisper-base` | The ONNX model that handles English. |
 | `ASR_QUANTIZATION` | `int8` | Weight precision; `int8`, `fp16` or empty for fp32. |
-| `ASR_THREADS` | `4` | Threads onnxruntime may use. |
+| `ASR_THREADS` | `0` | Threads per inference; `0` lets onnxruntime decide. |
 | `WARM_UP_EN` | `1` | Warm the English model at worker start. `0` saves 107 MB of download, but the first English message waits for it. |
 | `HF_TOKEN` | none | Optional Hugging Face token, for faster downloads. |
-| `HUEY_WORKER_COUNT` | `1` | The number of worker processes. Set in `docker-compose.yml`. |
-| `HUEY_WORKER_TYPE` | `process` | The worker type. Set in `docker-compose.yml`. |
+| `HUEY_WORKER_COUNT` | `1` | The number of worker threads. Set to 2 in `docker-compose.yml`. |
+| `HUEY_WORKER_TYPE` | `thread` | The worker type. Threads share the models. |
 
-Nothing talks to a cloud service. The transcript goes from the worker to the
-chat and into SQLite, and no third party sees it.
+Nothing talks to a cloud service beyond Telegram. The transcript goes from the
+worker to the chat and into Postgres, and no third party sees it.
 
 ## Development
 
 ```bash
-docker compose up --build                 # build the image, start the three services
+docker compose up --build                 # build the image, start the four services
 docker compose run --rm huey-worker       # one worker, in the foreground
 docker compose run --rm lazy-to-text-bot  # one bot, in the foreground
-docker compose down                       # stop the three services
+docker compose down                       # stop the four services
 ```
 
 Without Docker:
@@ -229,11 +233,13 @@ with the Telegram calls mocked and a real worker behind the queue.
 | `app/bot/texts.py` | Every string a person reads. |
 | `app/bot/keyboards.py` | Buttons and keyboards. |
 | `app/bot/handlers/` | `common`, `language`, `media`, `admin`, `requests`, `guards`. |
-| `app/services/` | `access`, `transcription`, `stats`, `media`: the rules, without Telegram. |
-| `app/infra/` | `database`, `asr`, `media`, `queue`: SQLite, ONNX, files, Huey. |
+| `app/services/` | `access`, `transcription`, `stats`: the rules, without Telegram. |
+| `app/infra/` | `database`, `asr`, `queue`: Postgres, ONNX, Huey. |
 | `app/worker/consumer.py` | The worker entry point. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
-| `docker-compose.yml` | The three services and the shared `./data` volume. |
+| `docker-compose.yml` | The four services and the shared `./data` volume. |
+| `scripts/smoke_flow.py` | The end-to-end check against a throwaway Postgres database. |
+| `scripts/import_sqlite.py` | One-time move of an older SQLite history into Postgres. |
 | `.env.example` | The variables and their defaults. |
 
 ## License

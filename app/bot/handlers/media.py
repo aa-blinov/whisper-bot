@@ -1,4 +1,9 @@
-"""Голосовое сообщение или видео-кружок превращаются в текст."""
+"""Голосовые, кружки, аудио- и видеофайлы превращаются в текст.
+
+Бот не скачивает файл к себе: он спрашивает у Telegram ссылку на файл и
+отдаёт её воркеру. Воркер читает поток ffmpeg-ом прямо по этой ссылке,
+поэтому копии на диске нет, а общий каталог нужен только под кэш моделей.
+"""
 
 from __future__ import annotations
 
@@ -17,14 +22,68 @@ from app.services.transcription import TranscriptionTimeout
 
 logger = logging.getLogger(__name__)
 
+# Bot API отдаёт ботам файлы не больше 20 МБ, дальше get_file отвечает
+# ошибкой. Проверяем до запроса, чтобы человек получил понятный ответ.
+TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
 
-def pick_media(message: Message) -> tuple[object, str] | None:
-    """Вернуть медиа и его тип, если это голосовое или кружок."""
+AUDIO_EXTENSIONS = (
+    ".mp3",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".wav",
+    ".flac",
+    ".m4a",
+    ".aac",
+    ".wma",
+    ".amr",
+)
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".3gp")
+
+
+def _document_is_media(document) -> str | None:
+    """Тип файла, если документ похож на аудио или видео."""
+    mime = (document.mime_type or "").lower()
+    name = (document.file_name or "").lower()
+    if mime.startswith("audio/") or mime in ("application/ogg", "application/x-ogg"):
+        return "audio"
+    if mime.startswith("video/"):
+        return "video"
+    if name.endswith(AUDIO_EXTENSIONS):
+        return "audio"
+    if name.endswith(VIDEO_EXTENSIONS):
+        return "video"
+    return None
+
+
+def pick_media(message: Message) -> tuple[object, str] | str | None:
+    """Вернуть вложение и тип, строку для «не поддерживается» или None.
+
+    Тип нужен только для истории и текстов, распознавание всё равно идёт
+    через ffmpeg по содержимому.
+    """
     if message.voice is not None:
         return message.voice, "voice"
     if message.video_note is not None:
         return message.video_note, "video_note"
+    if message.audio is not None:
+        return message.audio, "audio"
+    if message.document is not None:
+        kind = _document_is_media(message.document)
+        if kind is None:
+            return "unsupported"
+        return message.document, kind
+    if message.video is not None:
+        return message.video, "video"
     return None
+
+
+def file_url(context: ContextTypes.DEFAULT_TYPE, telegram_file) -> str:
+    """Ссылка на файл: PTB отдаёт её целиком, старые версии только путь."""
+    path = telegram_file.file_path or ""
+    if path.startswith(("http://", "https://")):
+        return path
+    return f"{context.bot.base_url}/file/{path}"
 
 
 async def send_transcript(
@@ -55,33 +114,38 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     picked = pick_media(message)
     if picked is None:
         return
-    media, file_type = picked
+    if picked == "unsupported":
+        await message.reply_text(texts.UNSUPPORTED)
+        return
+    attachment, file_type = picked
 
-    duration = int(getattr(media, "duration", 0) or 0)
     settings = deps.settings(context)
+    duration = int(getattr(attachment, "duration", 0) or 0)
     if duration > settings.max_media_seconds:
         await message.reply_text(
             texts.media_too_long(duration, settings.max_media_seconds)
         )
         return
 
+    size = int(getattr(attachment, "file_size", 0) or 0)
+    if size > TELEGRAM_FILE_LIMIT:
+        await message.reply_text(texts.FILE_TOO_BIG)
+        return
+
     await ensure_profile(update, context)
-    access = deps.access(context)
-    language = access.language(user.id)
+    language = deps.access(context).language(user.id)
     status = await message.reply_text(texts.DOWNLOADS)
 
-    storage = deps.media(context)
-    file_path = storage.new_path(file_type)
     started = time.time()
     try:
-        telegram_file = await media.get_file()
-        await telegram_file.download_to_drive(file_path)
+        telegram_file = await attachment.get_file()
+        source = file_url(context, telegram_file)
         await status.edit_text(texts.RECOGNIZING)
         await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
         try:
             transcript = await deps.transcription(context).transcribe(
-                file_path, file_type, language, duration
+                source, file_type, language, duration
             )
         except TranscriptionTimeout:
             await status.edit_text(texts.TIMEOUT)
@@ -102,9 +166,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             user.id, elapsed, file_type, transcript.text, transcript.language
         )
         logger.info(
-            "Запрос пользователя %s: %.1f с, %s символов",
+            "Запрос пользователя %s: %.1f с, %s, %s символов",
             user.id,
             elapsed,
+            file_type,
             len(transcript.text),
         )
     except Exception:
@@ -113,6 +178,3 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await status.edit_text(texts.INTERNAL_ERROR)
         except Exception:
             pass
-    finally:
-        # Воркер удаляет файл сам; здесь страховка, если задача не дошла.
-        storage.remove(file_path)
