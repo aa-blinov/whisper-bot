@@ -1,10 +1,10 @@
 # Documentation
 
-The documents for whisper-bot, and the page that presents it.
+The documents for lazy-to-text-bot, and the page that presents it.
 
 | Document | What it covers |
 | --- | --- |
-| [index.html](index.html) | The project page: what the bot does, the model, the admin flow, how to host it. Published to [aa-blinov.github.io/whisper-bot](https://aa-blinov.github.io/whisper-bot/). |
+| [index.html](index.html) | The project page: what the bot does, the model, the admin flow, how to host it. Published to [aa-blinov.github.io/lazy-to-text-bot](https://aa-blinov.github.io/lazy-to-text-bot/). |
 | [architecture.md](architecture.md) | How the bot is put together: the layers, the data flow and the boundaries. |
 | [screenshots/chat.svg](screenshots/chat.svg) | The diagram on the page: voice, queue, worker, reply, history. |
 | [../README.md](../README.md) | The front door: what the bot does and how to run it. |

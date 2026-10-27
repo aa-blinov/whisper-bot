@@ -1,6 +1,6 @@
 # Architecture
 
-How whisper-bot is put together.
+How lazy-to-text-bot is put together.
 
 The bot is two processes and a queue. One process talks to Telegram and owns
 the conversation; the other runs GigaAM v3 on the CPU. Redis carries the task

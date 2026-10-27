@@ -1,4 +1,4 @@
-# Lazy to Text
+# Lazy to Text bot
 
 Send a voice message to a Telegram bot and get the text back in the same chat.
 The transcription happens on a separate worker, so the bot keeps answering
@@ -6,11 +6,12 @@ while it runs. The text comes back punctuated and capitalised, because the
 recogniser itself is a model that writes sentences, not a stream of lowercase
 words.
 
-**Live page:** [aa-blinov.github.io/whisper-bot](https://aa-blinov.github.io/whisper-bot/) ·
+**Repository:** `lazy-to-text-bot` ·
+**Live page:** [aa-blinov.github.io/lazy-to-text-bot](https://aa-blinov.github.io/lazy-to-text-bot/) ·
 **Bot:** [@whisper_telegram_bot](https://t.me/whisper_telegram_bot)
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![House style](https://github.com/aa-blinov/whisper-bot/actions/workflows/house-style.yml/badge.svg)](https://github.com/aa-blinov/whisper-bot/actions/workflows/house-style.yml)
+[![House style](https://github.com/aa-blinov/lazy-to-text-bot/actions/workflows/house-style.yml/badge.svg)](https://github.com/aa-blinov/lazy-to-text-bot/actions/workflows/house-style.yml)
 
 ![The project page](docs/screenshots/site.png)
 
@@ -22,8 +23,8 @@ Docker with Compose, a Telegram bot token, and the numeric Telegram id of
 whoever is the administrator.
 
 ```bash
-git clone https://github.com/aa-blinov/whisper-bot.git
-cd whisper-bot
+git clone https://github.com/aa-blinov/lazy-to-text-bot.git
+cd lazy-to-text-bot
 cp .env.example .env
 docker compose up --build
 ```
@@ -35,7 +36,7 @@ TELEGRAM_BOT_TOKEN=123456:replace-with-the-token-from-botfather
 ADMIN_ID=123456789
 ```
 
-Three containers start: `redis` for the queue, `telegram-stt-bot` for the
+Three containers start: `redis` for the queue, `lazy-to-text-bot` for the
 conversation, and `huey-worker` for the transcription. The bot uses long
 polling, so the host needs no domain name and no certificate.
 
@@ -176,7 +177,7 @@ chat and into SQLite, and no third party sees it.
 ```bash
 docker compose up --build                 # build the image, start the three services
 docker compose run --rm huey-worker       # one worker, in the foreground
-docker compose run --rm telegram-stt-bot  # one bot, in the foreground
+docker compose run --rm lazy-to-text-bot  # one bot, in the foreground
 docker compose down                       # stop the three services
 ```
 

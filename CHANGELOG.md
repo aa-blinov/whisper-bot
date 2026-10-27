@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to whisper-bot. Versions are ordered newest first.
+All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 <!--
   The format is Keep a Changelog. Each entry says what changed and why it

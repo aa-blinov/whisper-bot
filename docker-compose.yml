@@ -1,7 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: whisper-redis
+    container_name: lazy-redis
     restart: unless-stopped
     command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
     healthcheck:
@@ -10,12 +10,12 @@ services:
       timeout: 3s
       retries: 10
 
-  telegram-stt-bot:
+  lazy-to-text-bot:
     build:
       context: .
       dockerfile: Dockerfile
-    image: telegram-stt-bot:latest
-    container_name: telegram-stt-bot
+    image: lazy-to-text-bot:latest
+    container_name: lazy-to-text-bot
     restart: unless-stopped
     env_file:
       - .env
@@ -40,7 +40,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: telegram-stt-bot:latest
+    image: lazy-to-text-bot:latest
     container_name: huey-worker
     restart: unless-stopped
     command: ["python", "-m", "app.worker.consumer"]

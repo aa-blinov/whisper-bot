@@ -1,4 +1,4 @@
-# AGENTS.md — agent context for `whisper-bot`
+# AGENTS.md — agent context for `lazy-to-text-bot`
 
 A Telegram bot that turns voice messages and video notes into text. Three
 containers: the bot, a Huey worker that runs GigaAM v3 on the CPU, and Redis
@@ -10,7 +10,7 @@ code, the comments and the docstrings are in Russian too.
 ```bash
 docker compose up --build                  # build the image, start redis, the bot and the worker
 docker compose run --rm huey-worker        # one worker, in the foreground
-docker compose run --rm telegram-stt-bot   # one bot, in the foreground
+docker compose run --rm lazy-to-text-bot    # one bot, in the foreground
 docker compose down                        # stop the three services
 pip install --no-cache-dir -r requirements.txt
 python -m app.main                         # the bot, without Docker

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for looking at whisper-bot.
+Thanks for looking at lazy-to-text-bot.
 
 ## Before you open a pull request
 

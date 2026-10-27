@@ -6,8 +6,8 @@
 контейнере возвращает текст.
 
 Запуск внутри контейнера:
-    docker compose cp scripts/smoke_flow.py telegram-stt-bot:/app/smoke_flow.py
-    docker compose exec telegram-stt-bot python smoke_flow.py
+    docker compose cp scripts/smoke_flow.py lazy-to-text-bot:/app/smoke_flow.py
+    docker compose exec lazy-to-text-bot python smoke_flow.py
 """
 
 from __future__ import annotations

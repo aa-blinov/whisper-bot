@@ -3,7 +3,7 @@
      administrator reads. app/bot/texts.py carries the same marker. -->
 
 ---
-name: whisper-bot
+name: lazy-to-text-bot
 description: A Telegram bot with no interface of its own. The surface is Telegram's reply keyboard, and every string the bot shows is in Russian.
 colors:
   source: telegram-client
@@ -30,7 +30,7 @@ spacing:
   sm: "4px"
 ---
 
-# Design system: whisper-bot
+# Design system: lazy-to-text-bot
 
 This project has no visual identity of its own. It is a Telegram bot: the
 keyboard, the colours, the type and the spacing all belong to the Telegram
