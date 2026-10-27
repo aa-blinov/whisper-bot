@@ -145,6 +145,27 @@ and the day they were added; `tasks` holds one row per finished transcription:
 the timestamp, the duration, the kind of media, the language and the text. An
 older database gains the missing columns on the next start.
 
+## Capacity
+
+Measured on one worker, one CPU, with the stack under load:
+
+| Load | Wall time | Last answer |
+| --- | --- | --- |
+| 8 clients, 12 s audio each | 10 s | 10 s |
+| 20 clients, 12 s audio each | 23 s | 23 s |
+| 4 clients, 58 s audio each | 12 s | 12 s |
+| 10 clients, 58 s audio each | 29 to 53 s | 29 to 53 s |
+
+The worker transcribes one file at a time, so a burst queues up instead of
+failing; the bot waits up to 120 seconds. A one-minute message takes 2.6 to
+5 seconds of worker time depending on what else runs on the host. To serve
+more at once, raise `HUEY_WORKER_COUNT` and use `HUEY_WORKER_TYPE=thread`:
+threads share the loaded models, process workers take about 700 MB each.
+
+The Telegram side does not block: downloads are async, and the burst above
+held the event loop to 50 to 90 ms of lag, all of it SQLite writes. The
+database runs in WAL mode with one reused connection for that reason.
+
 ## Configuration
 
 Everything is an environment variable, read from `.env` when the process

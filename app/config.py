@@ -64,9 +64,10 @@ class Settings:
     asr_model: str = "gigaam-v3-e2e-ctc"
     asr_model_en: str = "whisper-base"
     asr_quantization: str = "int8"
-    asr_threads: int = 4
+    asr_threads: int = 0
     warm_up_en: bool = True
     max_media_seconds: int = 300
+    result_ttl_seconds: int = 3600
 
     # Разобранный `.env` держим рядом, чтобы не перечитывать файл в тестах.
     raw: dict[str, str] = field(default_factory=dict)
@@ -91,7 +92,8 @@ class Settings:
             or "gigaam-v3-e2e-ctc",
             asr_model_en=os.getenv("ASR_MODEL_EN", "whisper-base").strip() or "whisper-base",
             asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
-            asr_threads=max(1, _int(os.getenv("ASR_THREADS"), 4)),
+            asr_threads=max(0, _int(os.getenv("ASR_THREADS"), 0)),
             warm_up_en=_bool(os.getenv("WARM_UP_EN"), True),
             max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
+            result_ttl_seconds=max(60, _int(os.getenv("RESULT_TTL_SECONDS"), 3600)),
         )

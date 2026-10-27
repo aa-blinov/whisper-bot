@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from huey import RedisHuey
+from huey import RedisExpireHuey
 
 from app.config import Settings
 from app.infra.media import MediaStorage
@@ -18,12 +18,16 @@ logger = logging.getLogger(__name__)
 
 _settings = Settings.from_env()
 
-huey = RedisHuey(
-    "whisper-bot",
+# RedisExpireHuey держит результат с TTL. Обычный RedisHuey пишет его в
+# бессрочный hash: если бот не дождался ответа по таймауту, ключ остаётся
+# в Redis навсегда. TTL закрывает эту утечку.
+huey = RedisExpireHuey(
+    "lazy-to-text-bot",
     host=_settings.redis_host,
     port=_settings.redis_port,
     db=_settings.redis_db,
     results=True,
+    expire_time=_settings.result_ttl_seconds,
 )
 
 
@@ -35,7 +39,10 @@ def transcribe_task(file_path: str, file_type: str, language: str = "ru"):
 
     settings = _Settings.from_env()
     recognizer = Recognizer(
-        settings.asr_model, settings.asr_model_en, settings.asr_quantization
+        settings.asr_model,
+        settings.asr_model_en,
+        settings.asr_quantization,
+        settings.asr_threads,
     )
     try:
         return recognizer.transcribe_file(file_path, language=language)
@@ -43,7 +50,8 @@ def transcribe_task(file_path: str, file_type: str, language: str = "ru"):
         logger.exception("Ошибка обработки файла %s", file_path)
         raise
     finally:
-        MediaStorage(settings.data_dir).remove(file_path)
+        storage = MediaStorage(settings.data_dir)
+        storage.remove(file_path)
         # Видео-кружок раньше превращался в отдельный mp3; подчищаем и его,
         # если файл остался от прошлых версий.
-        MediaStorage(settings.data_dir).remove(file_path + ".mp3")
+        storage.remove(file_path + ".mp3")

@@ -42,10 +42,17 @@ class Recognizer:
     его можно вызывать на каждый запрос.
     """
 
-    def __init__(self, model_ru: str, model_en: str, quantization: str | None = "int8") -> None:
+    def __init__(
+        self,
+        model_ru: str,
+        model_en: str,
+        quantization: str | None = "int8",
+        threads: int = 0,
+    ) -> None:
         self.model_ru = model_ru
         self.model_en = model_en
         self.quantization = quantization or None
+        self.threads = max(0, int(threads or 0))
 
     # --- модели -----------------------------------------------------------
 
@@ -72,10 +79,19 @@ class Recognizer:
                 ) from exc
 
             logger.info("Загрузка ONNX-модели '%s' (quantization=%s)", model_id, self.quantization)
+            options = None
+            if self.threads:
+                # 0 значит «пусть onnxruntime сам решит по числу ядер».
+                import onnxruntime as ort
+
+                options = ort.SessionOptions()
+                options.intra_op_num_threads = self.threads
+                options.inter_op_num_threads = 1
             model = onnx_asr.load_model(
                 model_id,
                 quantization=self.quantization,
                 providers=["CPUExecutionProvider"],
+                sess_options=options,
             )
             _models[model_id] = model
             logger.info("Модель '%s' загружена", model_id)

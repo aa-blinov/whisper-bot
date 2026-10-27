@@ -25,7 +25,10 @@ def main() -> None:
     os.makedirs(settings.data_dir, exist_ok=True)
 
     recognizer = Recognizer(
-        settings.asr_model, settings.asr_model_en, settings.asr_quantization
+        settings.asr_model,
+        settings.asr_model_en,
+        settings.asr_quantization,
+        settings.asr_threads,
     )
 
     started = time.time()

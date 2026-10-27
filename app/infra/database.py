@@ -8,12 +8,17 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 
 from app.domain import Stats, User
 
 logger = logging.getLogger(__name__)
+
+_connections: dict[str, sqlite3.Connection] = {}
+_connections_lock = threading.Lock()
 
 USERS_SCHEMA = """
     CREATE TABLE IF NOT EXISTS users (
@@ -52,15 +57,50 @@ TASK_COLUMNS = (("language", "TEXT"),)
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    """Соединение с доступом к колонкам по имени.
+    """Соединение с базой, одно на путь.
+
+    Соединение переиспользуется: открывать новое на каждый запрос на bind
+    mount стоит около 20 мс, а переиспользованное делает вставку за 2 мс.
+    Соединение открыто с `check_same_thread=False`, но используется только
+    из потока цикла событий: `with connect(...)` коммитит и не закрывает,
+    поэтому один и тот же объект служит дальше.
+
+    WAL и synchronous=NORMAL включены намеренно: база лежит на bind mount,
+    и на нём каждая запись с fsync стоила около 30 мс. Бот пишет историю
+    прямо в обработчике, в одном цикле событий, поэтому эти миллисекунды
+    складывались в заметные паузы под нагрузкой.
 
     Внешние ключи намеренно не включаем: удаление доступа не должно
     стирать историю запросов, на которой считает `/stats`. Ограничение
     объявлено в схеме, но SQLite его не проверяет.
     """
-    conn = sqlite3.connect(db_path, timeout=15)
-    conn.row_factory = sqlite3.Row
-    return conn
+    path = os.path.abspath(db_path)
+    with _connections_lock:
+        conn = _connections.get(path)
+        if conn is not None:
+            return conn
+
+        conn = sqlite3.connect(path, timeout=15, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error as exc:
+            logger.warning("Не удалось включить WAL для %s: %s", db_path, exc)
+        _connections[path] = conn
+        return conn
+
+
+def close_all() -> None:
+    """Закрыть все соединения: нужно тестам и аккуратному завершению."""
+    with _connections_lock:
+        for conn in _connections.values():
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        _connections.clear()
 
 
 def _add_missing_columns(conn: sqlite3.Connection, table: str, columns) -> None:

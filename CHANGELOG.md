@@ -106,6 +106,18 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Fixed
 
+- **The queue no longer leaks results.** `RedisHuey` kept every result in a
+  hash with no expiry, so a task the bot stopped waiting for left a permanent
+  key. The queue is `RedisExpireHuey` with `RESULT_TTL_SECONDS` (3600), and
+  the service deletes the key after a successful read.
+- **The database stopped stalling the event loop.** A connection per call on
+  the bind mount cost about 20 ms, and a plain insert 29 ms; the handler runs
+  in the event loop, so a burst turned that into lag. WAL,
+  `synchronous=NORMAL` and a reused connection bring it to 8 ms and 0.4 ms.
+- **`ASR_THREADS` now does something.** The setting was documented but never
+  passed to onnxruntime; it goes through `SessionOptions` now, and `0` means
+  "let onnxruntime decide".
+- **The queue namespace is `lazy-to-text-bot`**, matching the project name.
 - **Profile updates stopped burning Telegram's rate limit.** Every start used
   to call `set_my_name` and the description setters unconditionally, and the
   API answered `Flood control exceeded. Retry in 71054 seconds`. The bot now

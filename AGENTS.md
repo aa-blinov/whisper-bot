@@ -59,6 +59,8 @@ voice message and the MP4 of a video note.
 | `.github/workflows/pages.yml` | Deploys `docs/` to GitHub Pages on a push to `master`. |
 | `tests/test_bot.py` | Empty. |
 | `scripts/smoke_flow.py` | End-to-end handler and worker check with only Telegram mocked. |
+| `scripts/load_check.py` | Concurrent clients against the real queue: latency, loop lag, Redis keys. |
+| `scripts/make_avatar.py` | Rebuilds the circle-safe avatar from the square icon. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The three services and the shared `./data` volume. |
 | `.env.example` | The variables and their default values. |
@@ -102,6 +104,27 @@ voice message and the MP4 of a video note.
   The transcript goes from the recogniser into the chat unchanged; the model
   already writes punctuation. A "fix the text" call would add a third party,
   a timeout and a second thing that can silently fail.
+- **The database is WAL with one reused connection.** Opening a connection
+  per call on the bind mount cost about 20 ms, and a plain fsync insert about
+  29 ms; the handler runs in the event loop, so those milliseconds showed up
+  as lag. With WAL, `synchronous=NORMAL` and a connection cached per path,
+  an insert is 8 ms and a lookup 0.4 ms. `database.close_all()` exists for
+  tests.
+- **The result key has a TTL and is deleted after the read.** Ordinary
+  `RedisHuey` writes results into a hash with no expiry, so a task the bot
+  stopped waiting for left a permanent key. The queue is `RedisExpireHuey`
+  (`expire_time=RESULT_TTL_SECONDS`, 3600 by default), and
+  `TranscriptionService` deletes the key after a successful read.
+- **One worker means one transcription at a time.** Measured: 20 clients with
+  12-second clips finish in 23 seconds, 10 clients with 58-second clips in 29
+  to 53 seconds, all answered. The bot waits up to 120 seconds, so roughly 45
+  simultaneous minute-long messages would start timing out. Scale with
+  `HUEY_WORKER_COUNT` and `HUEY_WORKER_TYPE=thread`: threads share the models,
+  processes cost about 700 MB each.
+- **The response loop never blocks on a download.** Telegram downloads are
+  awaited, transcription is a separate process, and the only synchronous work
+  in the loop is SQLite and the small Redis calls. Under the burst above the
+  event loop stayed within 90 ms of lag.
 - **The bot and the worker meet in the `data/` directory.** The bot writes
   `data/<uuid hex>_<type>.bin` and the worker deletes that exact path after
   the transcription. The two containers need the same bind mount.

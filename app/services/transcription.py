@@ -8,7 +8,7 @@ import logging
 from huey.contrib.asyncio import aget_result
 
 from app.domain import Transcript
-from app.infra.queue import transcribe_task
+from app.infra.queue import huey, transcribe_task
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,20 @@ class TranscriptionService:
             logger.error("Воркер не ответил за отведённое время (%s с)", duration)
             raise TranscriptionTimeout("воркер не ответил вовремя") from exc
 
+        # RedisExpireHuey не удаляет результат при чтении, только ждёт TTL.
+        # Чистим сразу: иначе каждый запрос оставляет ключ на час.
+        self._discard(task.id)
+
         if not isinstance(result, (list, tuple)) or not result or not result[0]:
             return None
 
         text = str(result[0])
         recognized_language = result[1] if len(result) > 1 and result[1] else language
         return Transcript(text=text, language=recognized_language)
+
+    @staticmethod
+    def _discard(task_id: str) -> None:
+        try:
+            huey.storage.delete_data(task_id)
+        except Exception as exc:
+            logger.debug("Не удалось удалить результат задачи %s: %s", task_id, exc)
