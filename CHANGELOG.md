@@ -101,6 +101,10 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Fixed
 
+- **Profile updates stopped burning Telegram's rate limit.** Every start used
+  to call `set_my_name` and the description setters unconditionally, and the
+  API answered `Flood control exceeded. Retry in 71054 seconds`. The bot now
+  reads each field and writes only when it differs.
 - **The bot no longer loads a copy of the model.** `huey_tasks` imports the
   recognition module inside the task, so only the worker holds a session.
 - **`/stats` counts real additions.** `users.created_at` exists, and "new

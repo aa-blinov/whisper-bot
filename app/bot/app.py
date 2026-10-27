@@ -65,15 +65,59 @@ async def _upload_avatar(bot, path: Path) -> None:
         raise RuntimeError(payload.get("description", "setMyProfilePhoto failed"))
 
 
+async def _sync_text(bot, getter, setter, value: str, label: str, attr: str) -> None:
+    """Записать поле профиля, только если оно отличается.
+
+    Telegram ограничивает частоту смены имени и описания: жёсткий вызов
+    set_my_name на каждом старте упирается в Flood control на сутки. Поэтому
+    сначала читаем, потом, если нужно, пишем. Геттеры Bot API возвращают
+    объекты (`BotName`, `BotDescription`), значение лежит в поле.
+    """
+    try:
+        result = await getter()
+        current = getattr(result, attr, result)
+    except Exception as exc:
+        logger.debug("Не удалось прочитать %s: %s", label, exc)
+        current = None
+    if isinstance(current, str) and current == value:
+        return
+    try:
+        await setter(value)
+    except Exception as exc:
+        logger.warning("Не удалось обновить %s: %s", label, exc)
+
+
 async def _update_profile(bot) -> None:
     """Имя, описание и аватар бота. Аватар грузим, только если его ещё нет."""
     try:
         await bot.set_my_commands(WELCOME_COMMANDS)
-        await bot.set_my_name(BOT_NAME)
-        await bot.set_my_description(DESCRIPTION)
-        await bot.set_my_short_description(SHORT_DESCRIPTION)
     except Exception as exc:
-        logger.warning("Не удалось обновить профиль бота: %s", exc)
+        logger.warning("Не удалось обновить меню команд: %s", exc)
+
+    await _sync_text(
+        bot,
+        bot.get_my_name,
+        lambda value: bot.set_my_name(name=value),
+        BOT_NAME,
+        "имя",
+        "name",
+    )
+    await _sync_text(
+        bot,
+        bot.get_my_description,
+        lambda value: bot.set_my_description(description=value),
+        DESCRIPTION,
+        "описание",
+        "description",
+    )
+    await _sync_text(
+        bot,
+        bot.get_my_short_description,
+        lambda value: bot.set_my_short_description(short_description=value),
+        SHORT_DESCRIPTION,
+        "короткое описание",
+        "short_description",
+    )
 
     if not AVATAR_PATH.exists():
         return

@@ -134,6 +134,12 @@ voice message and the MP4 of a video note.
   `app/assets/bot_avatar.png` as the avatar. The avatar goes up only when the
   profile has none, so after replacing the file set `BOT_PROFILE_FORCE=1`
   once; otherwise the old picture stays.
+- **Profile writes are conditional, and that is not an optimisation.**
+  Telegram rate-limits `setMyName` and `setMyDescription` for about a day:
+  repeated starts with an unconditional `set_my_name` ended in `Flood control
+  exceeded. Retry in 71054 seconds`. `_update_profile` reads each field and
+  writes only when it differs; the getters return objects, so the comparison
+  is against `.name`, `.description` and `.short_description`.
 - **The avatar is uploaded with a raw HTTP multipart request.**
   `Bot.set_my_profile_photo` in python-telegram-bot 22.8 accepts a `file_id`
   or a URL only; passing a file makes the API answer "Field photo must be of
