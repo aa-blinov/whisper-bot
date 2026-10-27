@@ -27,6 +27,15 @@ async def main() -> None:
     base = "data/_test/load"
     os.makedirs(base, exist_ok=True)
 
+    # История пишется с внешним ключом: берём существующего пользователя,
+    # иначе Postgres отвергает каждую вставку и засоряет лог.
+    from app.infra import database
+
+    known = database.list_users(settings.database_url)
+    user_id = known[0].user_id if known else 111
+    if not known:
+        database.add_user(settings.database_url, user_id, first_name="Load check")
+
     files = []
     for index in range(args.clients):
         path = f"{base}/r{index}.mp3"
@@ -40,7 +49,7 @@ async def main() -> None:
         )
         elapsed = time.time() - started
         if transcript:
-            services.stats.record(111, elapsed, "voice", transcript.text, "ru")
+            services.stats.record(user_id, elapsed, "voice", transcript.text, "ru")
         return elapsed, transcript is not None
 
     client = redis.Redis(
