@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lazy to Text: голосовое в текст, с пунктуацией</title>
+  <meta name="description" content="Telegram-бот, который превращает голосовые сообщения и видео-кружки в текст с пунктуацией. Речь распознаёт GigaAM v3 на своём сервере, записи не уходят в облако.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#282828" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#fbf1c7" media="(prefers-color-scheme: light)">
+  <meta property="og:title" content="Lazy to Text">
+  <meta property="og:description" content="Голосовые сообщения и видео-кружки в текст, с пунктуацией. Свой сервер, без облака.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="favicon.png">
+  <link rel="icon" href="favicon.png" type="image/png">
+  <link rel="preload" href="fonts/jetbrains-mono-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Перейти к содержанию</a>
+
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="Lazy to Text, наверх">
+        <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path class="capsule" d="M8.25 4.5a3.75 3.75 0 1 1 7.5 0v8.25a3.75 3.75 0 1 1-7.5 0V4.5Z"/>
+          <path class="cradle" d="M6 10.5a.75.75 0 0 1 .75.75v1.5a5.25 5.25 0 1 0 10.5 0v-1.5a.75.75 0 0 1 1.5 0v1.5a6.751 6.751 0 0 1-6 6.709v2.291h3a.75.75 0 0 1 0 1.5h-7.5a.75.75 0 0 1 0-1.5h3v-2.291a6.751 6.751 0 0 1-6-6.709v-1.5A.75.75 0 0 1 6 10.5Z"/>
+        </svg>
+        <span>Lazy to Text</span>
+      </a>
+      <nav class="site-nav" aria-label="Разделы">
+        <a href="#how">Как работает</a>
+        <a href="#admin">Админу</a>
+        <a href="#model">Модель</a>
+        <a href="#privacy">Приватность</a>
+        <a href="#install">Поставить себе</a>
+      </nav>
+      <a class="header-github" href="https://github.com/aa-blinov/whisper-bot">GitHub</a>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <section class="hero wrap" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <h1 id="hero-title">Скажи голосом.<br>Прочитай текстом.</h1>
+        <p class="lede">Пришлите боту голосовое сообщение или видео-кружок, и он вернёт текст с пунктуацией и заглавными буквами. Речь распознаёт GigaAM v3 на вашем сервере: записи никуда не уходят, модель работает на той же машине, что и бот.</p>
+        <div class="actions">
+          <a class="button" href="https://t.me/whisper_telegram_bot">Открыть в Telegram</a>
+          <a class="button button-quiet" href="#install">Поставить себе</a>
+        </div>
+        <p class="fine">MIT. Три контейнера, long polling, без домена и сертификата.</p>
+      </div>
+
+      <figure class="demo" aria-describedby="demo-caption">
+        <div class="demo-keys" aria-hidden="true">
+          <span>@whisper_telegram_bot</span>
+        </div>
+        <div class="demo-window">
+          <div class="demo-bar"><span>Lazy to Text</span></div>
+          <div class="demo-body chat">
+            <div class="chat-row chat-out">
+              <span class="chat-voice"><span class="chat-dot" aria-hidden="true"></span>0:12</span>
+            </div>
+            <div class="chat-row">
+              <p class="chat-status">🎧 Скачиваю запись…</p>
+            </div>
+            <div class="chat-row">
+              <p class="chat-status">🧠 Распознаю…</p>
+            </div>
+            <div class="chat-row">
+              <blockquote class="chat-transcript">Привет. Это проверка распознавания речи. Сегодня хорошая погода, и я собираюсь пойти гулять. Сколько будет стоить билет на поезд?</blockquote>
+            </div>
+          </div>
+        </div>
+        <figcaption id="demo-caption">Макет переписки. Реплики бота настоящие, они взяты из кода: пунктуацию и заглавные буквы ставит сама модель.</figcaption>
+      </figure>
+    </section>
+
+    <section class="section wrap" id="how" aria-labelledby="how-title">
+      <h2 id="how-title">Что происходит между голосовым и текстом</h2>
+      <ol class="rail">
+        <li class="reveal">
+          <div class="rail-keys" aria-hidden="true"><kbd>→</kbd><span>голосовое</span></div>
+          <h3>Пришлите</h3>
+          <p>Бот принимает голосовые сообщения и видео-кружки, до 300 секунд каждое. Файл скачивается в каталог <code>data/</code> и уходит в очередь.</p>
+        </li>
+        <li class="reveal">
+          <div class="rail-keys" aria-hidden="true"><kbd>ONNX</kbd><span>на CPU</span></div>
+          <h3>Распознаём</h3>
+          <p>Отдельный воркер декодирует звук через ffmpeg и прогоняет его через GigaAM v3. Запись режется на куски по 25 секунд, разрез ищется в самом тихом месте, чтобы не рвать слово.</p>
+        </li>
+        <li class="reveal">
+          <div class="rail-keys" aria-hidden="true"><kbd>↵</kbd><span>текст</span></div>
+          <h3>Получите текст</h3>
+          <p>Ответ приходит в тот же чат: с точками, запятыми и заглавными буквами. Длинный текст бот разбивает на несколько сообщений, потому что у Telegram есть лимит.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section wrap" aria-labelledby="does-title">
+      <h2 id="does-title">Что умеет</h2>
+      <div class="two">
+        <div>
+          <h3>Голос и кружки</h3>
+          <p>Оба формата идут одним путём: ffmpeg сам достаёт дорожку из контейнера, поэтому отдельного шага «сделать mp3 из кружка» нет. Запись дольше лимита бот не примет и скажет, сколько секунд максимум.</p>
+        </div>
+        <div>
+          <h3>Пунктуация из модели</h3>
+          <p>GigaAM v3 e2e пишет готовые предложения: точки, запятые, заглавные буквы. Второй модели для пунктуации и похода в облако за правкой нет, текст идёт от распознавателя прямо в чат.</p>
+        </div>
+      </div>
+      <div class="two">
+        <div>
+          <h3>История и статистика</h3>
+          <p>Каждый запрос сохраняется в SQLite: время, длительность, тип медиа, язык и сам текст. <code>/stats</code> показывает людей, запросы и новые заявки за сегодня и за неделю.</p>
+        </div>
+        <div>
+          <h3>Язык на выбор</h3>
+          <p>Русский распознаёт GigaAM, английский распознаёт вторая модель, <code>whisper-base</code>. Язык запоминается в базе и переживает перезапуск бота.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="admin" aria-labelledby="admin-title">
+      <div class="split">
+        <div>
+          <h2 id="admin-title">Доступ выдаётся в два нажатия</h2>
+          <p>Бот закрытый: без разрешения он не отвечает на голосовые. Человек пишет <code>/start</code>, администратору приходит карточка с именем, <code>@username</code> и ID, и в ней две кнопки: «Разрешить» и «Отклонить».</p>
+          <p>Добавить можно и вручную: числовым ID, по <code>@username</code> или пересылкой любого сообщения этого человека. Удаление живёт в карточке человека, с подтверждением, и он получает уведомление.</p>
+          <ul class="notes">
+            <li>Панель <code>/admin</code>: список людей, добавление, ссылка для приглашения, статистика.</li>
+            <li>Ссылка <code>/invite</code> ведёт на бота, её можно просто переслать.</li>
+            <li>Администраторов может быть несколько: <code>ADMIN_ID</code> принимает список через запятую.</li>
+          </ul>
+        </div>
+        <div class="chat-card" role="img" aria-label="Карточка заявки: имя, ID и кнопки «Разрешить» и «Отклонить»">
+          <p class="chat-card-title">🔔 Заявка на доступ</p>
+          <p class="chat-card-line">Саша (@ahsasmi)</p>
+          <p class="chat-card-line chat-card-muted">ID: 2424870</p>
+          <p class="chat-card-actions">
+            <span class="chat-pill chat-pill-ok">✅ Разрешить</span>
+            <span class="chat-pill">🚫 Отклонить</span>
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="model" aria-labelledby="model-title">
+      <h2 id="model-title">Модель и цифры</h2>
+      <p class="lede">Одна ONNX-сессия на процесс, int8. Ни Torch, ни CTranslate2, ни faster-whisper в зависимостях нет.</p>
+      <div class="table-wrap" role="region" aria-label="Модели" tabindex="0">
+        <table>
+          <thead>
+            <tr><th scope="col">Модель</th><th scope="col">Язык</th><th scope="col">Вес</th><th scope="col">Пунктуация</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"><code>gigaam-v3-e2e-ctc</code></th><td>русский</td><td>214 МБ</td><td>своя, из модели</td></tr>
+            <tr><th scope="row"><code>whisper-base</code></th><td>английский</td><td>107 МБ</td><td>частичная</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="fine">Вес дан для файла int8 в кэше <code>data/hf</code>. Короткое голосовое возвращается примерно за секунду, модель прогревается при старте воркера.</p>
+      <figure class="shot reveal">
+        <img src="screenshots/chat.svg" width="960" height="640" loading="lazy" alt="Схема: голосовое сообщение попадает в бота, задача уходит в очередь Redis, воркер распознаёт её моделью GigaAM v3, текст возвращается в чат, а запись сохраняется в SQLite.">
+        <figcaption>Путь запроса: Telegram, Redis, воркер с моделью, ответ в чат и строка в истории.</figcaption>
+      </figure>
+    </section>
+
+    <section class="section wrap" id="privacy" aria-labelledby="privacy-title">
+      <div class="split">
+        <div>
+          <h2 id="privacy-title">Всё на вашем сервере</h2>
+          <p>Бот ходит в Telegram и больше никуда. Распознавание идёт на CPU той машины, где стоит контейнер, история лежит в SQLite в каталоге <code>data/</code>, модель там же, в <code>data/hf</code>.</p>
+          <p>Нет ни облачной расшифровки, ни подписки, ни второго сервиса, которому уходят записи. Токен бота и <code>ADMIN_ID</code> живут в <code>.env</code>, а <code>.env</code> в <code>.gitignore</code>.</p>
+        </div>
+        <ul class="notes">
+          <li>Записи удаляются сразу после распознавания.</li>
+          <li>Тексты остаются в базе: это личные данные, доступ к серверу и есть доступ к ним.</li>
+          <li>Модель скачивается один раз, дальше старт читает кэш из тома.</li>
+          <li>Никакой аналитики и внешних запросов, кроме Telegram и однократной загрузки веса.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section wrap" id="install" aria-labelledby="install-title">
+      <h2 id="install-title">Поставить себе</h2>
+      <p class="lede">Нужны Docker и токен из BotFather. Дальше три команды.</p>
+      <div class="command">
+        <pre><code>git clone https://github.com/aa-blinov/whisper-bot.git
+cd whisper-bot
+cp .env.example .env
+# TELEGRAM_BOT_TOKEN и ADMIN_ID
+docker compose up --build</code></pre>
+        <button class="copy" type="button" data-copy="git clone https://github.com/aa-blinov/whisper-bot.git
+cd whisper-bot
+cp .env.example .env
+docker compose up --build">Скопировать</button>
+      </div>
+      <div class="table-wrap" role="region" aria-label="Переменные" tabindex="0">
+        <table>
+          <thead>
+            <tr><th scope="col">Переменная</th><th scope="col">Зачем</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"><code>TELEGRAM_BOT_TOKEN</code></th><td>Токен бота. Без него бот не стартует.</td></tr>
+            <tr><th scope="row"><code>ADMIN_ID</code></th><td>Ваш числовой ID, можно несколько через запятую. Пусто: админом станет первый, кто напишет <code>/start</code>.</td></tr>
+            <tr><th scope="row"><code>MAX_MEDIA_SECONDS</code></th><td>Максимальная длительность записи, по умолчанию 300.</td></tr>
+            <tr><th scope="row"><code>ASR_MODEL</code></th><td>Модель для русского, по умолчанию <code>gigaam-v3-e2e-ctc</code>.</td></tr>
+            <tr><th scope="row"><code>REDIS_HOST</code></th><td>Адрес очереди. В Compose это имя сервиса <code>redis</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="install-notes">
+        <div>
+          <h3>Проверить</h3>
+          <p><code>docker compose ps</code>: три сервиса, redis healthy. Первый старт скачивает 214 МБ модели в <code>data/hf</code> и дальше берёт её оттуда.</p>
+        </div>
+        <div>
+          <h3>Обновить</h3>
+          <p><code>git pull</code>, затем <code>docker compose up --build -d</code>. База и модель в томе, они переживают пересборку.</p>
+        </div>
+        <div>
+          <h3>Без Docker</h3>
+          <p><code>pip install -r requirements.txt</code>, затем <code>python -m app.main</code> и <code>python -m app.worker.consumer</code> в двух терминалах.</p>
+        </div>
+        <div>
+          <h3>Что дальше</h3>
+          <p>Напишите боту <code>/start</code>, откройте <code>/admin</code> и добавьте первого человека. Подробности в README и в <code>docs/architecture.md</code>.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <p>Lazy to Text, MIT. © 2026 Alexander Blinov. Интерфейс страницы: <a href="https://github.com/aa-blinov/monos-ui">Monos</a>.</p>
+      <nav class="footer-nav" aria-label="Ссылки проекта">
+        <a href="https://github.com/aa-blinov/whisper-bot">Исходники</a>
+        <a href="https://github.com/aa-blinov/whisper-bot#readme">README</a>
+        <a href="https://github.com/aa-blinov/whisper-bot/blob/master/CHANGELOG.md">Changelog</a>
+        <a href="https://t.me/whisper_telegram_bot">Бот</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script src="site.js" defer></script>
+</body>
+</html>

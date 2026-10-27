@@ -1,4 +1,4 @@
-# Whisper STT bot
+# Lazy to Text
 
 Send a voice message to a Telegram bot and get the text back in the same chat.
 The transcription happens on a separate worker, so the bot keeps answering
@@ -6,7 +6,13 @@ while it runs. The text comes back punctuated and capitalised, because the
 recogniser itself is a model that writes sentences, not a stream of lowercase
 words.
 
+**Live page:** [aa-blinov.github.io/whisper-bot](https://aa-blinov.github.io/whisper-bot/) ·
+**Bot:** [@whisper_telegram_bot](https://t.me/whisper_telegram_bot)
+
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![House style](https://github.com/aa-blinov/whisper-bot/actions/workflows/house-style.yml/badge.svg)](https://github.com/aa-blinov/whisper-bot/actions/workflows/house-style.yml)
+
+![The project page](docs/screenshots/site.png)
 
 ---
 

@@ -128,12 +128,15 @@ not meant to match word for word.
 
 **Assets:** the bot avatar is the Lazy to Text icon (a teal microphone on a
 cream rounded square), and the profile text lives in the BotFather fields set
-by the code. There is no logo file in the repository and no screenshot of a
+by the code. The project page in `docs/` carries the same icon and the Monos
+palette. There is no logo file of its own and no screenshot of a real
 conversation.
 
 ## Evidence on Hand
 
 - `README.md` describes the flow, the dependencies and the deployment.
+- `docs/index.html` is the project page: what the bot does, the model, the
+  admin flow and how to host it.
 - `app/bot/handlers/media.py` holds the voice and video-note pipeline.
 - `app/bot/handlers/admin.py` holds the panel, the access requests and the
   add/remove conversations.

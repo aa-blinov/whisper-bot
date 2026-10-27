@@ -55,6 +55,8 @@ voice message and the MP4 of a video note.
 | `app/infra/media.py` | Downloaded files: where they go and how they are removed. |
 | `app/infra/queue.py` | The Huey instance and `transcribe_task`. |
 | `app/worker/consumer.py` | The worker entry point: logging, warm-up, Huey consumer. |
+| `docs/` | The project page (`index.html`, `style.css`, `site.js`, fonts, `screenshots/`) and `architecture.md`. |
+| `.github/workflows/pages.yml` | Deploys `docs/` to GitHub Pages on a push to `master`. |
 | `tests/test_bot.py` | Empty. |
 | `scripts/smoke_flow.py` | End-to-end handler and worker check with only Telegram mocked. |
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |

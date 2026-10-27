@@ -25,6 +25,9 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Changed
 
+- **The README is the front door again.** The title is the product name, the
+  live page and the bot are linked from the first lines, and the screenshot
+  of the page sits under the badges.
 - **The code is split into layers.** `app/domain.py` holds the dataclasses,
   `app/services` the rules (access, transcription, stats), `app/infra` SQLite,
   ONNX, files and the queue, and `app/bot` the Telegram side with the texts,
@@ -70,6 +73,10 @@ All notable changes to whisper-bot. Versions are ordered newest first.
 
 ### Added
 
+- **The project has a page.** `docs/index.html` presents the bot: the
+  conversation, the three steps, the admin flow, the model, privacy and the
+  `docker compose` start. It follows the Monos kit, has no build step, and
+  `.github/workflows/pages.yml` publishes `docs/` to GitHub Pages.
 - **The administrator gets a panel**: `/admin` with the allowed users, the
   add button, the invite link and `/stats`.
 - **`/invite`** returns the `https://t.me/<bot>` link to forward.
