@@ -144,8 +144,10 @@ read over HTTPS.
   reply runs dynamic text through `html.escape` and the app-wide
   `parse_mode` is HTML; one reply was once killed by a single underscore.
 - **The transcript is a `<pre>` block.** Telegram shows a copy button for
-  code blocks, and a transcript is copied. Keep the escaping and the
-  splitting: raw `<` or a chunk above 4096 characters is a rejected message.
+  code blocks, and a transcript is copied. `transcript_blocks` escapes first
+  and splits the escaped text (`split_escaped`), because splitting first and
+  escaping after grows the chunk past the 4096 limit when the text has many
+  `<` or `&`. Raw `<` or an oversized chunk is a rejected message.
 - **The chosen language lives in Postgres.** It used to be
   `context.user_data["lang"]` and reset on every restart.
 

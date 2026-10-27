@@ -127,6 +127,10 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Fixed
 
+- **A long transcript with HTML characters could be rejected.** The text was
+  split before escaping, so a 3800-character chunk full of `<` or `&` grew
+  past Telegram's 4096 limit after escaping. The transcript is escaped first
+  and split with `split_escaped`, which also refuses to cut inside an entity.
 - **The queue no longer leaks results.** `RedisHuey` kept every result in a
   hash with no expiry, so a task the bot stopped waiting for left a permanent
   key. The queue is `RedisExpireHuey` with `RESULT_TTL_SECONDS` (3600), and

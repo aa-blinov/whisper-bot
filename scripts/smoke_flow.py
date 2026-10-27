@@ -320,6 +320,15 @@ async def run() -> None:
         )
         check(not any("<pre>" in text for text in texts()), "расшифровки не было")
 
+        # 6c. Не админ не может открыть панель по callback.
+        print("6c. Callback без прав")
+        sent.clear()
+        await process(callback_update(STRANGER_ID, "admin:list"))
+        check(
+            not any("Админ-панель" in text for text in texts() + edits),
+            "панель закрыта",
+        )
+
         # 7. Язык.
         print("7. Язык распознавания")
         sent.clear()
@@ -571,6 +580,16 @@ async def run() -> None:
             any("голосовое" in text.lower() for text in texts()),
             "бот объяснил, что прислать",
         )
+
+        # 15b. Длинный текст режется, спецсимволы экранируются.
+        print("15b. Длинный текст и экранирование")
+        from app.bot.formatting import escape, transcript_blocks
+
+        blocks = transcript_blocks("строка с <тегом> " * 600)
+        check(len(blocks) > 1, "длинный текст разбит на части")
+        check(all(len(block) < 4096 for block in blocks), "каждая часть короче лимита")
+        check(all("<pre>" in block and "</pre>" in block for block in blocks), "каждая часть в pre")
+        check(escape("<b>&") == "&lt;b&gt;&amp;", "HTML экранируется")
 
         # 16. Таймаут воркера показывает понятный текст, а не падает.
         print("16. Таймаут распознавания")
