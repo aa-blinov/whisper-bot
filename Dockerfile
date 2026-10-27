@@ -1,27 +1,34 @@
-FROM python:3.14.7-slim AS builder
+FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-FROM python:3.14.7-slim AS app
+FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y \
+# ffmpeg — декодирование OGG/Opus и MP4-кружков, libsndfile — WAV/FLAC,
+# libgomp1 — OpenMP для onnxruntime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
-    --no-install-recommends && \
-    rm -rf /var/lib/apt/lists/*
+    libgomp1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 COPY app/ .
 
-RUN mkdir -p /app/data && \
-    mkdir -p /app/data/whisper_models && \
-    chmod -R 777 /app/data
+# Кэш моделей и база живут в том же томе, что и media: ./data:/app/data.
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/data/hf \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+RUN mkdir -p /app/data/hf && chmod -R 777 /app/data
 
 CMD ["python", "-u", "bot.py"]

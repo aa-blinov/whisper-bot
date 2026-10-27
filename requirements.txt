@@ -1,9 +1,14 @@
-faster-whisper==1.2.1
-huey==3.4.0
-pydub==0.25.1
-python-dotenv==1.2.4
-python-telegram-bot==22.8
+# ONNX-распознавание: GigaAM v3 e2e (пунктуация) + Whisper для английского.
+onnx-asr[hub,cpu]==0.12.0
+onnxruntime==1.31.1
+numpy==2.5.4
+soundfile==0.14.0
+
+# Очередь и Telegram.
+huey==3.5.3
 redis==8.1.0
-httpx>=0.28.1
-torch==2.14.1
-torchaudio==2.11.0
+python-telegram-bot==22.8
+
+# Прочее.
+httpx==0.28.1
+python-dotenv==1.2.4

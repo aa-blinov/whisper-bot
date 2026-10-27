@@ -1,82 +1,74 @@
-import os
+"""Необязательная правка расшифровки языковой моделью через OpenRouter.
+
+GigaAM уже отдаёт текст с пунктуацией, поэтому этот шаг — только про
+опечатки распознавания. Без `OPENROUTER_API_KEY` он выключен, и текст
+уходит пользователю как есть.
+"""
+
+from __future__ import annotations
+
 import json
 import logging
 
-from dotenv import load_dotenv
-
 import httpx
+
+from config import settings
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL_NAME = os.getenv("OPENROUTER_MODEL_NAME")
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+TIMEOUT_SECONDS = 20.0
+
 LLM_PROMPT_TEMPLATE = (
-    "Текст ниже получен с помощью автоматического распознавания речи (STT). "
-    "Твоя задача — исправить только ошибки, вызванные распознаванием, а также грамматические и пунктуационные ошибки. "
-    "Не меняй слова на синонимы, не перефразируй и не изменяй смысл, если слово уже подходит по контексту. "
-    "Замени слово только если оно явно неуместно или нарушает смысл. "
-    "Верни только исправленный текст, без каких-либо пояснений:\n\n{text}"
+    "Текст ниже получен автоматическим распознаванием русской речи. "
+    "Он уже с пунктуацией и заглавными буквами — её менять не нужно. "
+    "Исправь только явные ошибки распознавания: ослышанные слова, "
+    "разорванные слова, неверные имена и числа. "
+    "Не перефразируй, не меняй стиль, не добавляй и не убирай смысл. "
+    "Верни только исправленный текст, без пояснений:\n\n{text}"
 )
 
 
-async def correct_text_with_llm(text: str) -> str:
-    """
-    Исправляет ошибки в тексте с помощью LLM через Openrouter API.
-    Возвращает исправленный текст или оригинальный текст в случае ошибки.
-    """
-    if not OPENROUTER_API_KEY:
-        logger.warning(
-            "OPENROUTER_API_KEY не установлен. Пропускаем исправление текста через LLM."
-        )
-        return text
+async def correct_text(text: str) -> str | None:
+    """Вернуть исправленный текст или None, если правка недоступна."""
+    if not settings.llm_enabled:
+        return None
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type": "application/json",
+        "X-Title": "whisper-bot",
     }
     payload = {
-        "model": OPENROUTER_MODEL_NAME,
+        "model": settings.openrouter_model,
         "messages": [
-            {
-                "role": "system",
-                "content": "/no_think"
-            },
-            {
-                "role": "user",
-                "content": LLM_PROMPT_TEMPLATE.format(text=text),
-            }
+            {"role": "system", "content": "/no_think"},
+            {"role": "user", "content": LLM_PROMPT_TEMPLATE.format(text=text)},
         ],
         "temperature": 0.1,
         "max_tokens": 2048,
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                OPENROUTER_API_URL, headers=headers, json=payload
-            )
+        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+            response = await client.post(OPENROUTER_API_URL, headers=headers, json=payload)
             response.raise_for_status()
+            corrected = response.json()["choices"][0]["message"]["content"].strip()
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "OpenRouter ответил %s: %s", exc.response.status_code, exc.response.text[:300]
+        )
+        return None
+    except httpx.RequestError as exc:
+        logger.error("OpenRouter недоступен: %s", exc)
+        return None
+    except (KeyError, IndexError, json.JSONDecodeError) as exc:
+        logger.error("Неожиданный ответ OpenRouter: %s", exc)
+        return None
+    except Exception:
+        logger.exception("Ошибка правки текста")
+        return None
 
-            response_data = response.json()
-            corrected_text = response_data["choices"][0]["message"]["content"].strip()
-            logger.info("Текст успешно исправлен через API Openrouter.")
-            return corrected_text
-    except httpx.RequestError as e:
-        logger.error(f"Ошибка запроса к API Openrouter: {e}")
-        return text
-    except httpx.HTTPStatusError as e:
-        logger.error(
-            f"HTTP ошибка от Openrouter API: {e.response.status_code} - {e.response.text}"
-        )
-        return text
-    except (KeyError, json.JSONDecodeError) as e:
-        logger.error(f"Ошибка разбора ответа API Openrouter: {e}")
-        logger.error(
-            f"Ответ от API Openrouter: {response.text if 'response' in locals() else 'Нет ответа'}"
-        )
-        return text
-    except Exception as e:
-        logger.exception(f"Неизвестная ошибка при исправлении текста через LLM: {e}")
-        return text
+    if not corrected or corrected == text:
+        return None
+    return corrected

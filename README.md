@@ -2,8 +2,9 @@
 
 Send a voice message to a Telegram bot and get the text back in the same chat.
 The transcription happens on a separate worker, so the bot keeps answering
-while it runs. With an OpenRouter key set, a language model fixes the
-mistakes speech recognition makes before the text comes back.
+while it runs. The text comes back punctuated and capitalised, because the
+recogniser itself is a model that writes sentences, not a stream of lowercase
+words.
 
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -32,36 +33,59 @@ Three containers start: `redis` for the queue, `telegram-stt-bot` for the
 conversation, and `huey-worker` for the transcription. The bot uses long
 polling, so the host needs no domain name and no certificate.
 
-The first start downloads the Whisper model into `data/whisper_models`, and
-every start after that reads it from there. The download needs the internet,
-and a Hugging Face token makes it faster.
+The first start downloads the GigaAM v3 ONNX weights into `data/hf`, and
+every start after that reads them from there. The download is about 260 MB
+and needs the internet once.
 
 The bot talks in Russian. The person it talks to picks the recognition
 language, Russian or English, from the keyboard.
 
-Nobody else gets an answer until the administrator has added them by id. Start
-a chat with the bot, send `/add_user`, then the numeric Telegram id, and the
-next voice message is transcribed.
+`ADMIN_ID` may be left empty: then the first person to send `/start` becomes
+the administrator, and the log records it. Set it to pin the administrator
+explicitly; several ids can be separated by commas.
 
 ## What it does
 
 - **Transcribes voice messages and video notes.** A voice message and a round
   video message both become text, in the language the user picked.
+- **Writes with punctuation.** The Russian model is GigaAM v3 e2e, which emits
+  punctuation, capital letters and normalised numbers by itself. No second
+  punctuation step, no LLM call in the middle.
 - **Answers in the same chat.** The reply lands under the message, and the
   status line under it is edited while the transcription runs.
 - **Keeps answering while it works.** The audio is queued, so a slow
   transcription never blocks the next message.
-- **Corrects the transcript when it can.** With `OPENROUTER_API_KEY` set, the
-  raw text goes to a model on OpenRouter that is asked to fix recognition and
-  punctuation errors and to change nothing else. Without the key the raw text
-  is returned.
+- **Corrects the transcript when asked to.** With `OPENROUTER_API_KEY` set,
+  the text goes to a model on OpenRouter that is asked to fix recognition
+  slips and nothing else. Without the key, the recogniser's text is the reply.
 - **Remembers every request.** Each finished transcription is stored in SQLite
-  with the time it took, the kind of media and the text itself.
-- **Keeps the list of allowed users.** The administrator adds a person by id
-  and removes one the same way. Everybody else is refused.
+  with the time it took, the kind of media, the language and the text.
+- **Keeps the list of allowed users.** The administrator adds a person by id,
+  by `@username`, by forwarded message, or by tapping "Allow" on the request
+  that arrives when somebody new sends `/start`.
 - **Reports the numbers.** `/stats` gives the total number of users, and the
   active users, the number of requests and the number of new users for today
   and for the last seven days.
+
+## Admin
+
+Everything the administrator needs is behind `/admin`: one panel with the
+list of allowed users, an add button, an invite link and the statistics.
+
+Adding a person takes one message and one tap:
+
+- send the numeric id, `123456789`;
+- send the username, `@someone`;
+- forward any message from that person — the id and the name come from the
+  forwarded profile;
+- or wait for their request: a person who writes `/start` without access
+  sends you a card with **Allow** and **Deny**, and the allow is one tap.
+
+Removing somebody is the same shape: the list is a set of buttons, a button
+opens the person's card, and the card asks for confirmation. A person whose
+access is removed gets a message saying so.
+
+The `/invite` command gives the `https://t.me/<bot>` link to forward.
 
 ## How it works
 
@@ -70,9 +94,10 @@ voice message or video note
   -> app/bot.py: download to data/<uuid hex>_<type>.bin
   -> Redis: Huey task transcribe_task(path, type, language)
   -> app/huey_tasks.py: stt_processor.transcribe_media_sync
-       video note -> ffmpeg -> mp3 -> faster-whisper on the CPU
+       soundfile or ffmpeg -> 16 kHz mono float32
+       GigaAM v3 e2e CTC (ONNX) on the CPU, 25 s chunks
   -> Redis: the result
-  -> app/bot.py: app/llm.py -> OpenRouter -> the reply in the chat
+  -> app/bot.py: app/llm.py (optional) -> OpenRouter -> the reply in the chat
 ```
 
 The bot and the worker are separate containers, and they meet twice: in the
@@ -82,28 +107,28 @@ result travel.
 
 The worker is one process by default. `docker-compose.yml` sets
 `HUEY_WORKER_COUNT=1` and `HUEY_WORKER_TYPE=process`, and every worker
-process loads its own copy of the Whisper model, so the number of workers is
-also the number of copies of the model in memory.
+process loads its own copy of the model, so the number of workers is also the
+number of copies of the model in memory.
 
-A voice message goes to Faster-Whisper as it was downloaded. A video note is
-converted to MP3 with pydub, which calls ffmpeg, and the MP3 is deleted right
-after the transcription.
+A voice message and a video note go through the same path: the file is saved
+as `.bin`, and ffmpeg finds the audio track inside whatever the container is.
+There is no intermediate MP3 and no `pydub`.
 
 The bot waits for the result with `aget_result` and edits one status message
-while it waits: "Получил медиа! Скачиваю файл...", then "Файл скачан.
-Запускаю транскрибацию...", then "Транскрибация завершена. Попытка исправить
-ошибки...".
+while it waits: "Скачиваю запись…", then "Распознаю речь…". A long transcript
+is split into several messages, because Telegram caps a message at 4096
+characters.
 
-The correction is one request to `https://openrouter.ai/api/v1/chat/completions`
-with `temperature=0.1`, `max_tokens=2048` and a timeout of 15 seconds. Any
-failure returns the raw text, and the person sending the message never sees
-the difference.
+The correction, when a key is set, is one request to
+`https://openrouter.ai/api/v1/chat/completions` with `temperature=0.1`,
+`max_tokens=2048` and a timeout of 20 seconds. Any failure returns the raw
+text, and the person sending the message never sees the difference.
 
 The database is SQLite, at `DB_PATH` or `data/bot_database.db`. It has two
-tables. `users` holds the allowed ids with their names, and `tasks` holds one
-row per finished transcription: the timestamp, the duration, the kind of
-media and the recognised text. An older database gains the three name columns
-on the next start.
+tables. `users` holds the allowed ids with their names, the chosen language
+and the day they were added; `tasks` holds one row per finished transcription:
+the timestamp, the duration, the kind of media, the language and the text. An
+older database gains the missing columns on the next start.
 
 ## Configuration
 
@@ -113,59 +138,64 @@ starts. `.env.example` holds the same list with the values filled in.
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | none | The token from BotFather. Without it the bot logs the error and exits. |
-| `ADMIN_ID` | none | The numeric Telegram id of the administrator. Every admin command stays closed without it. |
+| `ADMIN_ID` | none | Numeric Telegram id of the administrator, or several separated by commas. Empty means the first `/start` claims the role. |
 | `DB_PATH` | `data/bot_database.db` | The SQLite file, relative to the working directory. |
-| `WHISPER_MODEL` | `small` | The Faster-Whisper model. |
-| `WHISPER_COMPUTE_TYPE` | `int8` | The compute type CTranslate2 runs. |
-| `WHISPER_BEAM_SIZE` | `5` | The beam size of the decoder. |
-| `WHISPER_CPU_THREADS` | `10` | The threads CTranslate2 uses. |
-| `WHISPER_NUM_WORKERS` | `1` | The CTranslate2 workers. |
-| `HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN` | none | The Hugging Face token. Either name works, and both are exported to the Hub. |
+| `DATA_DIR` | `data` | Where downloaded media and the model cache live. |
+| `MAX_MEDIA_SECONDS` | `300` | The longest recording the bot accepts. |
+| `REDIS_HOST` | `redis` | Queue host. Compose sets it to the service name. |
+| `REDIS_PORT` | `6379` | Queue port. |
+| `REDIS_DB` | `0` | Queue database number. |
+| `ASR_MODEL` | `gigaam-v3-e2e-ctc` | The ONNX model that handles Russian. |
+| `ASR_MODEL_EN` | `whisper-base` | The ONNX model that handles English. |
+| `ASR_QUANTIZATION` | `int8` | Weight precision; `int8`, `fp16` or empty for fp32. |
+| `ASR_THREADS` | `4` | Threads onnxruntime may use. |
 | `OPENROUTER_API_KEY` | none | The key for the correction request. Without it the raw text is returned. |
-| `OPENROUTER_MODEL_NAME` | none | The model that does the correction. `.env.example` sets `openai/gpt-oss-20b:free`. |
+| `OPENROUTER_MODEL_NAME` | `openai/gpt-oss-20b:free` | The model that does the correction. |
+| `HF_TOKEN` | none | Optional Hugging Face token, for faster downloads. |
 | `HUEY_WORKER_COUNT` | `1` | The number of worker processes. Set in `docker-compose.yml`. |
 | `HUEY_WORKER_TYPE` | `process` | The worker type. Set in `docker-compose.yml`. |
 
-Three things are not variables. The address of the OpenRouter API and the
-prompt that asks for the correction are constants in `app/llm.py`, and the
-Redis host `redis` on port 6379 is a constant in `app/tasks.py`.
+Two things are not variables. The address of the OpenRouter API and the
+prompt that asks for the correction are constants in `app/llm.py`.
 
 ## Development
 
 ```bash
 docker compose up --build                 # build the image, start the three services
 docker compose run --rm huey-worker       # one worker, in the foreground
-docker compose run --rm telegram-stt-bot   # one bot, in the foreground
+docker compose run --rm telegram-stt-bot  # one bot, in the foreground
 docker compose down                       # stop the three services
 ```
 
 Without Docker:
 
 ```bash
-pip install --no-cache-dir -r requirements.txt \
-    --extra-index-url https://download.pytorch.org/whl/cpu
+pip install --no-cache-dir -r requirements.txt
 python app/bot.py
 python app/huey_consumer.py
 ```
 
 The modules import each other by their top-level names, so `app/` has to be
-the directory the script is started from. `app/tasks.py` connects to the
-Redis host named `redis`, so a run outside Compose needs that name to
-resolve, and ffmpeg has to be on the path for the video notes.
+the directory the script is started from. `app/tasks.py` connects to
+`REDIS_HOST` (default `redis`), so a run outside Compose needs that name to
+resolve or an override in the environment. ffmpeg has to be on the path.
 
 The repository has no test command. `tests/test_bot.py` is empty, and no test
 runner is in `requirements.txt`.
 
 | Path | What it holds |
 | --- | --- |
-| `app/bot.py` | The Telegram handlers, the keyboards and the replies. |
+| `app/bot.py` | The Telegram handlers, the media pipeline and the replies. |
+| `app/admin.py` | The admin panel, access requests and the add/remove conversations. |
+| `app/keyboards.py` | Buttons and keyboards. |
+| `app/config.py` | The settings object. |
 | `app/tasks.py` | The Huey instance and the Redis connection. |
 | `app/huey_tasks.py` | The task the bot enqueues. |
 | `app/huey_consumer.py` | The worker entry point. |
-| `app/stt_processor.py` | The model, the audio conversion and the transcription. |
+| `app/stt_processor.py` | The ONNX models, the audio decoding and the transcription. |
 | `app/llm.py` | The correction request. |
 | `app/database.py` | The SQLite schema and the queries behind `/stats`. |
-| `Dockerfile` | Two stages on `python:3.10.18-slim`, with ffmpeg and libsndfile1. |
+| `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The three services and the shared `./data` volume. |
 | `.env.example` | The variables and their defaults. |
 

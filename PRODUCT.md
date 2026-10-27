@@ -81,18 +81,25 @@ Confirmed by the code:
   accepted.
 - The recognition language is Russian or English, chosen by the person, and
   it falls back to Russian.
-- The transcription runs on the CPU with Faster-Whisper, `device="cpu"`, and
-  the compute type `int8` by default.
+- The transcript arrives punctuated and capitalised: Russian is recognised by
+  GigaAM v3 e2e CTC, which writes punctuation itself, and English by a second
+  ONNX model.
+- The transcription runs on the CPU with ONNX Runtime, on models cached in
+  `data/hf`.
 - The bot keeps answering while the transcription runs, because the work is
   on a Huey queue and the bot waits for the result.
 - The transcript can be corrected by a model on OpenRouter, with
-  `temperature=0.1`, `max_tokens=2048` and a timeout of 15 seconds. Without
+  `temperature=0.1`, `max_tokens=2048` and a timeout of 20 seconds. Without
   a key the raw text is returned.
 - Every finished transcription is stored with its timestamp, its wall-clock
-  duration, the kind of media and the text.
+  duration, the kind of media, the language and the text.
 - The allowed people and the request history live in SQLite at `DB_PATH`.
-- The administrator adds and removes people by id, and reads the counters for
-  today and for the last seven days from `/stats`.
+- The administrator adds a person by numeric id, by `@username`, by forwarding
+  one of their messages, or by tapping **Allow** on the request that arrives
+  when a stranger writes `/start`. Removal is a button in the person's card,
+  with a confirmation.
+- The administrator reads the counters for today and for the last seven days
+  from `/stats`.
 - The bot is a long-polling Telegram bot, and the deployment is three
   containers: bot, worker, Redis.
 
@@ -127,16 +134,17 @@ repository.
 ## Evidence on Hand
 
 - `README.md` describes the flow, the dependencies and the deployment.
-- `app/bot.py` holds the handlers, the keyboards, the admin commands and
-  every reply.
-- `app/stt_processor.py` holds the model settings, the download, the audio
-  conversion and the transcription.
+- `app/bot.py` holds the handlers, the media pipeline and every reply.
+- `app/admin.py` holds the panel, the access requests and the add/remove
+  conversations.
+- `app/stt_processor.py` holds the ONNX sessions, the audio decoding and the
+  transcription.
 - `app/llm.py` holds the correction prompt, the address of the API and the
   request.
 - `app/database.py` holds the schema, the migrations and the counters behind
   `/stats`.
-- `requirements.txt` pins every dependency, and the Dockerfile adds the CPU
-  wheel index.
+- `requirements.txt` pins every dependency, and the Dockerfile installs
+  ffmpeg, libsndfile1 and libgomp1.
 - `docker-compose.yml` names the three services and the shared `./data`
   volume.
 - `.env.example` holds the variables and their default values.

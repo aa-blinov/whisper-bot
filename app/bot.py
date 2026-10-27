@@ -1,601 +1,429 @@
 # house-style: emoji-ok
 # The emoji here are the product: they are what the user
 # sees in a message or a button. See docs/house-style.md.
+"""Telegram-бот: голосовые сообщения и видео-кружки превращаются в текст.
+
+Бот принимает медиа, складывает файл в `data/`, отправляет задачу в Huey и
+ждёт результат от воркера. Распознавание — GigaAM v3 (ONNX) с готовой
+пунктуацией.
+"""
+
+from __future__ import annotations
+
 import asyncio
+import html
 import logging
 import os
-import re
 import time
 import uuid
-from datetime import datetime
 
-from dotenv import load_dotenv
-
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import BotCommand, Update
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (
     Application,
+    ApplicationBuilder,
     CommandHandler,
+    ContextTypes,
+    Defaults,
     MessageHandler,
     filters,
-    ContextTypes,
 )
 from huey.contrib.asyncio import aget_result
 
+import admin
 import database
+import keyboards
 import llm
+from config import settings
 from huey_tasks import transcribe_task
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-if ADMIN_ID is not None:
-    try:
-        ADMIN_ID = int(ADMIN_ID)
-    except Exception:
-        ADMIN_ID = None
-DB_PATH = os.getenv("DB_PATH", "data/bot_database.db")
+MAX_MESSAGE_CHARS = 3_800
+# Сколько ждать воркер: запись длиннее — дольше распознавание, но не бесконечно.
+RESULT_TIMEOUT_MIN = 60
+RESULT_TIMEOUT_MAX = 900
 
-database.init_db(DB_PATH)
+START_TEXT = (
+    "Привет, {name}!\n\n"
+    "Пришлите голосовое сообщение или видео-кружок — верну текст. "
+    "Речь распознаётся с пунктуацией и заглавными буквами, модель работает на этом же сервере."
+)
+ADMIN_HINT = "\n\nВы администратор: /admin — управление доступом и статистика."
 
 
-def get_admin_keyboard() -> ReplyKeyboardMarkup:
-    """Получить клавиатуру для административных команд с кнопкой выбора языка."""
-    keyboard = [
-        [
-            KeyboardButton("Язык"),
-            KeyboardButton("Список пользователей"),
-        ],
-        [
-            KeyboardButton("Добавить пользователя"),
-            KeyboardButton("Удалить пользователя"),
-        ],
+def db_path() -> str:
+    return settings.db_path
+
+
+def _is_admin(user_id: int | None) -> bool:
+    return admin.is_admin(user_id)
+
+
+async def _ensure_profile(update: Update) -> None:
+    user = update.effective_user
+    if user is None:
+        return
+    database.touch_profile(
+        db_path(),
+        user.id,
+        user.first_name or "",
+        user.last_name or "",
+        user.username or "",
+    )
+
+
+async def _deny_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отказ + заявка администратору, одним сообщением пользователю."""
+    sent = await admin.access_request(update, context)
+    if update.effective_user and database.is_user_allowed(db_path(), update.effective_user.id):
+        await start(update, context)
+        return
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "Пока нет доступа к боту. Я отправил заявку администратору — "
+            "как только он её подтвердит, можно присылать голосовые."
+            if sent
+            else "Пока нет доступа к боту. Напишите администратору."
+        )
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start: приветствие, меню и создание профиля."""
+    user = update.effective_user
+    if user is None or update.effective_message is None:
+        return
+
+    if not database.is_user_allowed(db_path(), user.id):
+        await _deny_access(update, context)
+        return
+
+    await _ensure_profile(update)
+    text = START_TEXT.format(name=html.escape(user.first_name or "друг"))
+    if _is_admin(user.id):
+        text += ADMIN_HINT
+    await update.effective_message.reply_text(
+        text,
+        reply_markup=keyboards.main_menu(_is_admin(user.id)),
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None:
+        return
+    lines = [
+        "<b>Что умеет бот</b>",
+        "• голосовое сообщение → текст",
+        "• видео-кружок → текст",
+        "• текст приходит с пунктуацией и заглавными буквами",
+        "",
+        "Команды:",
+        "/language — язык распознавания (русский или английский)",
+        "/help — эта справка",
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+    if _is_admin(update.effective_user.id if update.effective_user else None):
+        lines += [
+            "",
+            "<b>Администратору</b>",
+            "/admin — панель: доступ, список, статистика",
+            "/add_user — добавить человека",
+            "/users — список допущенных",
+            "/invite — ссылка-приглашение",
+            "/stats — статистика",
+        ]
+    await update.effective_message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
-def get_language_keyboard(current_lang: str = "ru") -> ReplyKeyboardMarkup:
-    """Получить клавиатуру для выбора языка с пометкой текущего языка."""
-    ru_label = "Русский"
-    en_label = "Английский"
-    if current_lang == "ru":
-        ru_label += " (выбран)"
-    elif current_lang == "en":
-        en_label += " (выбран)"
-    keyboard = [[KeyboardButton(ru_label)], [KeyboardButton(en_label)]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
-
-def get_user_keyboard() -> ReplyKeyboardMarkup:
-    """Получить клавиатуру для обычных пользователей с кнопкой выбора языка."""
-    keyboard = [[KeyboardButton("Язык")]]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
-
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:  # noqa
-    """Обработчик команды /start."""
+async def language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    user_id = user.id if user else None
-    user_name = user.full_name if user else "Пользователь"
+    if user is None or update.effective_message is None:
+        return
+    current = database.get_language(db_path(), user.id)
+    await update.effective_message.reply_text(
+        "Выберите язык распознавания:",
+        reply_markup=keyboards.language_menu(current),
+    )
 
-    if user_id is not None and database.is_user_allowed(DB_PATH, user_id):
-        if ADMIN_ID is not None and user_id == ADMIN_ID:
-            if update.message:
-                await update.message.reply_text(
-                    f"Привет, {user_name}! Я готов конвертировать твои голосовые сообщения и видео-кружки в текст. "
-                    "Ты – администратор, поэтому у тебя есть доступ к дополнительным командам.",
-                    reply_markup=get_admin_keyboard(),
-                )
-        else:
-            if update.message:
-                await update.message.reply_text(
-                    f"Привет, {user_name}! Я готов конвертировать твои голосовые сообщения и видео-кружки в текст. "
-                    "Просто отправь мне их!",
-                    reply_markup=get_user_keyboard(),
-                )
+
+async def language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    if message is None or user is None or not message.text:
+        return
+
+    text = message.text.strip()
+    if keyboards.BTN_RU in text or text.lower().startswith("рус"):
+        language = "ru"
+    elif keyboards.BTN_EN in text or text.lower().startswith("англ"):
+        language = "en"
     else:
-        if update.message:
-            await update.message.reply_text(
-                f"Привет, {user_name}! К сожалению, у тебя нет доступа к этому боту. "
-                "Пожалуйста, свяжись с администратором, чтобы получить доступ."
-            )
-
-
-async def admin_menu_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE  # noqa
-) -> None:
-    """Обработчик команды /admin_menu для доступа к административным функциям."""
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
-        if update.message:
-            await update.message.reply_text(
-                "Извини, эта команда доступна только администратору."
-            )
-        return
-    if update.message:
-        await update.message.reply_text(
-            "Добро пожаловать в панель администратора! Выбери команду:",
-            reply_markup=get_admin_keyboard(),
-        )
-
-
-async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /add_user для добавления пользователя."""
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
-        if update.message:
-            await update.message.reply_text(
-                "Извини, эта команда доступна только администратору."
-            )
+        await language_menu(update, context)
         return
 
-    if not hasattr(context, "user_data") or context.user_data is None:
-        context.user_data = {}
-    context.user_data["admin_action"] = "add"
-
-    if update.message:
-        await update.message.reply_text(
-            "Пожалуйста, введите ID пользователя, которого нужно добавить.",
-            reply_markup=None,
-        )
-    return
-
-
-async def remove_user_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Обработчик команды /remove_user для удаления пользователя."""
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
-        if update.message:
-            await update.message.reply_text(
-                "Извини, эта команда доступна только администратору."
-            )
-        return
-
-    if not hasattr(context, "user_data") or context.user_data is None:
-        context.user_data = {}
-    context.user_data["admin_action"] = "remove"
-
-    if not context.args:
-        users = database.get_all_users(DB_PATH)
-        if not users:
-            if update.message:
-                await update.message.reply_text(
-                    "Список разрешённых пользователей пуст."
-                )
-            return
-        message_text = "Список разрешённых пользователей:\n\n"
-        keyboard = []
-        for u_id, is_admin_flag, *_ in users:
-            status = " (Админ)" if is_admin_flag else ""
-            message_text += f"- `{u_id}`{status}\n"
-            if not is_admin_flag:
-                keyboard.append([KeyboardButton(str(u_id))])
-        message_text += "\nПожалуйста, выберите пользователя для удаления, нажав на кнопку с его ID."
-        if update.message:
-            await update.message.reply_text(
-                message_text,
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard, resize_keyboard=True, one_time_keyboard=True
-                ),
-            )
-        return
-
-    try:
-        user_to_remove_id = int(context.args[0])
-        database.remove_user(DB_PATH, user_to_remove_id)
-        if update.message:
-            await update.message.reply_text(
-                f"Пользователь с ID `{user_to_remove_id}` успешно удалён из списка разрешённых.",
-                parse_mode="Markdown",
-                reply_markup=get_admin_keyboard(),
-            )
-    except ValueError:
-        if update.message:
-            await update.message.reply_text(
-                "Неверный формат ID пользователя. Пожалуйста, используйте только цифры."
-            )
-    except Exception:
-        logger.exception("Ошибка при удалении пользователя:")
-        if update.message:
-            await update.message.reply_text(
-                "Произошла ошибка при удалении пользователя. Попробуйте ещё раз.",
-                reply_markup=get_admin_keyboard(),
-            )
+    database.set_language(db_path(), user.id, language)
+    name = keyboards.LANGUAGE_NAMES[language]
+    note = (
+        "\n\nАнглийский распознаёт вторая модель — первый запрос на нём "
+        "загружает её и потому идёт дольше."
+        if language == "en"
+        else ""
+    )
+    await message.reply_text(
+        f"Язык распознавания: {name}.{note}",
+        reply_markup=keyboards.main_menu(_is_admin(user.id)),
+    )
 
 
-async def list_users_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Обработчик команды /list_users для отображения списка пользователей."""
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
-        if update.message:
-            await update.message.reply_text(
-                "Извини, эта команда доступна только администратору."
-            )
-        return
-
-    users = database.get_all_users(DB_PATH)
-    if not users:
-        if update.message:
-            await update.message.reply_text("Список разрешенных пользователей пуст.")
-        return
-
-    message_text = "Список разрешенных пользователей: \n\n"
-    for u_id, is_admin_flag, first_name, last_name, username in users:
-        status = " (Админ)" if is_admin_flag else ""
-        name = f"{first_name or ''} {last_name or ''}".strip()
-        username_str = f" (@{escape_md(username)})" if username else ""
-        if name or username_str:
-            message_text += f"- `{escape_md(str(u_id))}`{status} — {escape_md(name)}{username_str}\n"
+def _split_text(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
+    """Разбить длинный текст по строкам, чтобы влезть в лимит Telegram."""
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(current) + len(line) > limit:
+            chunks.append(current)
+            current = line
         else:
-            message_text += f"- `{escape_md(str(u_id))}`{status}\n"
-    if update.message:
-        await update.message.reply_text(message_text, parse_mode="Markdown")
+            current += line
+    if current:
+        chunks.append(current)
+    return chunks or [text]
 
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /stats для отображения статистики бота."""
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
-        if update.message:
-            await update.message.reply_text(
-                "Извини, эта команда доступна только администратору."
-            )
-        return
-
-    stats = database.get_bot_stats(DB_PATH)
-
-    # Получаем текущую дату в формате DD.MM.YYYY
-    today = datetime.now().strftime("%d.%m.%Y")
-
-    message_text = "📊 Статистика бота\n\n"
-    message_text += f"👥 Всего пользователей: {stats['total_users']}\n\n"
-    message_text += f"📅 Сегодня ({today}):\n"
-    message_text += f"   • Активных: {stats['today_active']}\n"
-    message_text += f"   • Запросов на STT: {stats['today_requests']}\n"
-    message_text += f"   • Новых: {stats['today_new']}\n\n"
-    message_text += "📈 За последние 7 дней:\n"
-    message_text += f"   • Активных: {stats['week_active']}\n"
-    message_text += f"   • Запросов на STT: {stats['week_requests']}\n"
-    message_text += f"   • Новых: {stats['week_new']}"
-
-    if update.message:
-        await update.message.reply_text(message_text)
-
-
-async def handle_language_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /language для выбора языка распознавания."""
-    current_lang = "ru"
-    if hasattr(context, "user_data") and context.user_data is not None:
-        current_lang = context.user_data.get("lang", "ru")
-    if update.message:
-        await update.message.reply_text(
-            f"Пожалуйста, выберите язык для распознавания (текущий: {'Русский' if current_lang == 'ru' else 'Английский'}):",
-            reply_markup=get_language_keyboard(current_lang),
+async def _send_transcript(message, text: str, is_admin: bool) -> None:
+    """Отправить расшифровку (возможно, несколькими сообщениями)."""
+    chunks = _split_text(text)
+    for index, chunk in enumerate(chunks):
+        last = index == len(chunks) - 1
+        await message.reply_text(
+            f"<blockquote>{html.escape(chunk)}</blockquote>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboards.main_menu(is_admin) if last else None,
+            disable_web_page_preview=True,
         )
 
 
-async def handle_language_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик выбора языка пользователем."""
-    if not update.message or not update.message.text:
-        return
-    text = update.message.text.strip().lower()
-    if not hasattr(context, "user_data") or context.user_data is None:
-        context.user_data = {}
-    is_admin = False
-    user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is not None and user_id == ADMIN_ID:
-        is_admin = True
-    if "англ" in text:
-        context.user_data["lang"] = "en"
-        await update.message.reply_text(
-            "Выбран английский язык. Теперь отправьте голосовое сообщение или видео-кружок.",
-            reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
-        )
-    elif "рус" in text:
-        context.user_data["lang"] = "ru"
-        await update.message.reply_text(
-            "Выбран русский язык. Теперь отправьте голосовое сообщение или видео-кружок.",
-            reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
-        )
-    else:
-        current_lang = context.user_data.get("lang", "ru")
-        await update.message.reply_text(
-            "Пожалуйста, выберите язык с помощью кнопок ниже.",
-            reply_markup=get_language_keyboard(current_lang),
-        )
+def _result_timeout(duration: int) -> int:
+    return min(RESULT_TIMEOUT_MAX, max(RESULT_TIMEOUT_MIN, int(duration or 0) * 2))
 
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик получения голосовых сообщений и видео-кружков."""
+    """Голосовое сообщение или видео-кружок → текст."""
+    message = update.effective_message
     user = update.effective_user
-    user_id = user.id if user else None
-
-    if user_id is None or not database.is_user_allowed(DB_PATH, user_id):
-        if update.message:
-            await update.message.reply_text(
-                "Извини, у тебя нет доступа для отправки медиа. Пожалуйста, свяжись с администратором."
-            )
+    if message is None or user is None:
         return
 
-    if not hasattr(context, "user_data") or context.user_data is None:
-        context.user_data = {}
-    language = context.user_data.get("lang", "ru")
-
-    file_obj = None
-    file_type: str = ""
-    msg = update.message
-    if msg:
-        if getattr(msg, "forward_origin", None):
-            if getattr(msg, "voice", None):
-                file_obj = msg.voice
-                file_type = "voice"
-            elif getattr(msg, "video_note", None):
-                file_obj = msg.video_note
-                file_type = "video_note"
-        else:
-            if getattr(msg, "voice", None):
-                file_obj = msg.voice
-                file_type = "voice"
-            elif getattr(msg, "video_note", None):
-                file_obj = msg.video_note
-                file_type = "video_note"
-
-    if file_obj is None or not file_type:
-        if update.message:
-            await update.message.reply_text(
-                "Я могу обрабатывать только голосовые сообщения и видео-кружки."
-            )
+    if not database.is_user_allowed(db_path(), user.id):
+        await _deny_access(update, context)
         return
 
-    status_message = None
-    if update.message:
-        status_message = await update.message.reply_text(
-            "Получил медиа! Скачиваю файл..."
+    if message.voice is not None:
+        media, file_type = message.voice, "voice"
+    elif message.video_note is not None:
+        media, file_type = message.video_note, "video_note"
+    else:
+        return
+
+    duration = int(getattr(media, "duration", 0) or 0)
+    if duration > settings.max_media_seconds:
+        await message.reply_text(
+            f"Слишком длинная запись: {duration} с. Максимум — "
+            f"{settings.max_media_seconds} с."
         )
+        return
 
-    file_path = None
-    start_time = time.time()
+    await _ensure_profile(update)
+    language = database.get_language(db_path(), user.id)
+    status = await message.reply_text("🎧 Скачиваю запись…")
+
+    os.makedirs(settings.data_dir, exist_ok=True)
+    file_path = os.path.join(settings.data_dir, f"{uuid.uuid4().hex}_{file_type}.bin")
+    started = time.time()
     try:
-        logger.info(f"Начало скачивания файла для пользователя {user_id}")
-        unique_name = f"data/{uuid.uuid4().hex}_{file_type}.bin"
-        telegram_file = await file_obj.get_file()
-        await telegram_file.download_to_drive(unique_name)
-        file_path = unique_name
-        logger.info(f"Файл скачан: {file_path}")
+        telegram_file = await media.get_file()
+        await telegram_file.download_to_drive(file_path)
+        await status.edit_text("🧠 Распознаю речь…")
+        await context.bot.send_chat_action(chat_id=message.chat_id, action=ChatAction.TYPING)
 
-        if status_message:
-            await status_message.edit_text("Файл скачан. Запускаю транскрибацию...")
-
-        huey_task = transcribe_task(file_path, file_type, language)
+        task = transcribe_task(file_path, file_type, language)
         try:
-            transcribe_result = await aget_result(
-                huey_task, backoff=1.15, max_delay=1.0, preserve=False
+            result = await asyncio.wait_for(
+                aget_result(task, backoff=1.2, max_delay=1.0, preserve=False),
+                timeout=_result_timeout(duration),
             )
-        except Exception as e:
-            logger.error(f"Ошибка ожидания результата huey: {e}")
-            if status_message:
-                await status_message.edit_text(
-                    "Ошибка при обработке очереди. Попробуйте позже."
-                )
-            return
-        duration = time.time() - start_time
-
-        if not transcribe_result or not isinstance(transcribe_result, (list, tuple)):
-            if update.message:
-                await update.message.reply_text(
-                    "Не удалось распознать текст. Возможно, аудио было слишком коротким или нечетким."
-                )
+        except asyncio.TimeoutError:
+            logger.error("Воркер не ответил за отведённое время (%s с)", duration)
+            await status.edit_text(
+                "Распознавание заняло слишком много времени. Попробуйте ещё раз позже."
+            )
             return
 
-        raw_text, lang = transcribe_result if len(transcribe_result) == 2 else (transcribe_result[0], None)
+        if not isinstance(result, (list, tuple)) or not result or not result[0]:
+            await status.edit_text(
+                "Не удалось распознать текст. Возможно, запись слишком короткая или тихая."
+            )
+            return
 
-        final_text = raw_text
-        if raw_text:
-            if status_message:
-                await status_message.edit_text(
-                    "Транскрибация завершена. Попытка исправить ошибки..."
-                )
-            corrected_text = await llm.correct_text_with_llm(raw_text)
-            if corrected_text != raw_text:
-                final_text = corrected_text
-                if status_message:
-                    await status_message.edit_text(
-                        "Текст исправлен. Отправляю ответ..."
-                    )
-            else:
-                if status_message:
-                    await status_message.edit_text(
-                        "Исправление текста не потребовалось или не удалось исправить. Отправляю ответ..."
-                    )
+        text = result[0]
+        if len(result) > 1 and result[1]:
+            language = result[1]
 
-        if final_text:
-            if update.message:
-                is_admin = False
-                user = update.effective_user
-                user_id = user.id if user else None
-                if ADMIN_ID is not None and user_id == ADMIN_ID:
-                    is_admin = True
-                await update.message.reply_text(
-                    f"`{final_text}`",
-                    parse_mode="Markdown",
-                    reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
-                )
-            if user_id is not None:
-                database.record_task_metadata(
-                    DB_PATH, user_id, duration, file_type, final_text
-                )
-        else:
-            if update.message:
-                is_admin = False
-                user = update.effective_user
-                user_id = user.id if user else None
-                if ADMIN_ID is not None and user_id == ADMIN_ID:
-                    is_admin = True
-                await update.message.reply_text(
-                    "Не удалось распознать текст. Возможно, аудио было слишком коротким или нечетким.",
-                    reply_markup=get_admin_keyboard() if is_admin else get_user_keyboard(),
-                )
+        if settings.llm_enabled:
+            await status.edit_text("✍️ Правлю распознанный текст…")
+            corrected = await llm.correct_text(text)
+            if corrected:
+                text = corrected
 
-    except asyncio.CancelledError:
-        logger.info(f"Задача для пользователя {user_id} была отменена.")
-        if status_message:
-            await status_message.edit_text("Обработка отменена.")
+        elapsed = time.time() - started
+        try:
+            await status.delete()
+        except Exception as exc:  # сообщение могли удалить вручную
+            logger.debug("Не удалось убрать статус: %s", exc)
+        await _send_transcript(message, text, _is_admin(user.id))
+        database.record_task_metadata(
+            db_path(), user.id, elapsed, file_type, text, language
+        )
+        logger.info(
+            "Запрос пользователя %s: %.1f с, %s символов", user.id, elapsed, len(text)
+        )
     except Exception:
-        logger.exception(f"Ошибка при обработке медиа для пользователя {user_id}:")
-        if status_message:
-            await status_message.edit_text(
-                "Произошла внутренняя ошибка при обработке. Пожалуйста, попробуй еще раз позже."
-            )
+        logger.exception("Ошибка обработки медиа пользователя %s", user.id)
+        try:
+            await status.edit_text("Внутренняя ошибка при обработке. Попробуйте ещё раз.")
+        except Exception:
+            pass
     finally:
-        # Удаляем файл, если он еще существует (на случай ошибок до обработки в huey)
-        if file_path and os.path.exists(file_path):
+        # Воркер удаляет файл сам; здесь — страховка, если задача не дошла.
+        if os.path.exists(file_path):
             try:
                 os.remove(file_path)
-                logger.info(f"Файл удален в finally блоке: {file_path}")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить файл {file_path} в finally: {e}")
+            except OSError as exc:
+                logger.warning("Не удалось удалить %s: %s", file_path, exc)
 
 
-async def handle_admin_id_input(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
-    """Обработчик ввода ID пользователя для добавления или удаления."""
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_message is None:
+        return
     user = update.effective_user
-    user_id = user.id if user else None
-    if ADMIN_ID is None or user_id != ADMIN_ID:
+    await update.effective_message.reply_text(
+        "Ок, вернулся в меню.",
+        reply_markup=keyboards.main_menu(_is_admin(user.id if user else None)),
+    )
+
+
+async def fallback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Любой другой текст: не молчим, объясняем, что делать."""
+    if update.effective_message is None:
         return
-    if not update.message or not update.message.text:
-        return
-    text = update.message.text.strip()
-    user_data = getattr(context, "user_data", {}) or {}
-    action = user_data.get("admin_action")
-    if text.isdigit() and action:
+    await update.effective_message.reply_text(
+        "Пришлите голосовое сообщение или видео-кружок — превращу его в текст.\n"
+        "Список команд: /help",
+        reply_markup=keyboards.main_menu(
+            _is_admin(update.effective_user.id if update.effective_user else None)
+        ),
+    )
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Ошибка при обработке обновления", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
         try:
-            target_id = int(text)
-            if action == "add":
-                try:
-                    chat = await context.bot.get_chat(target_id)
-                    first_name = chat.first_name or ""
-                    last_name = chat.last_name or ""
-                    username = chat.username or ""
-                except Exception:
-                    first_name = ""
-                    last_name = ""
-                    username = ""
-                database.add_user(DB_PATH, target_id, first_name=first_name, last_name=last_name, username=username)
-                await update.message.reply_text(
-                    f"Пользователь с ID `{target_id}` успешно добавлен в список разрешённых!",
-                    parse_mode="Markdown",
-                    reply_markup=get_admin_keyboard(),
-                )
-                try:
-                    await context.bot.send_message(
-                        chat_id=target_id,
-                        text="Поздравляю! Тебе предоставлен доступ к боту для транскрибации голосовых сообщений. Начни с /start!",
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"Не удалось отправить сообщение новому пользователю {target_id}: {e}"
-                    )
-                    await update.message.reply_text(
-                        f"Пользователь добавлен, но не удалось ему отправить сообщение {target_id}, возможно, он не начал диалог с ботом."
-                    )
-            elif action == "remove":
-                database.remove_user(DB_PATH, target_id)
-                await update.message.reply_text(
-                    f"Пользователь с ID `{target_id}` успешно удалён из списка разрешённых.",
-                    parse_mode="Markdown",
-                    reply_markup=get_admin_keyboard(),
-                )
-            if hasattr(context, "user_data") and context.user_data is not None:
-                context.user_data["admin_action"] = None
-        except Exception:
-            await update.message.reply_text(
-                "Ошибка при обработке ID пользователя. Проверьте ID и попробуйте ещё раз.",
-                reply_markup=get_admin_keyboard(),
+            await update.effective_message.reply_text(
+                "Что-то пошло не так. Попробуйте ещё раз или напишите позже."
             )
-            if hasattr(context, "user_data") and context.user_data is not None:
-                context.user_data["admin_action"] = None
+        except Exception:
+            pass
 
 
-def escape_md(text: str) -> str:
-    """Экранирует спецсимволы Markdown (не V2)."""
-    if not text:
-        return ""
-    # Экранируем только символы для обычного Markdown
-    return re.sub(r'([_\*\[\]()`])', r'\\\1', text)
+async def _post_init(application: Application) -> None:
+    """Команды в меню Telegram и подсказка при первом открытии чата."""
+    commands = [
+        BotCommand("start", "Начать"),
+        BotCommand("language", "Язык распознавания"),
+        BotCommand("admin", "Панель администратора"),
+        BotCommand("help", "Справка"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+        await application.bot.set_my_short_description(
+            "Голосовые сообщения и видео-кружки в текст, с пунктуацией."
+        )
+    except Exception as exc:
+        logger.warning("Не удалось обновить меню команд: %s", exc)
+    logger.info("Бот запущен: @%s", application.bot.username)
 
 
-def main() -> None:
-    """Запуск бота."""
-    if not TOKEN:
-        logger.error("TELEGRAM_BOT_TOKEN не установлен!")
-        return
+def build_application() -> Application:
+    application = (
+        ApplicationBuilder()
+        .token(settings.token)
+        .defaults(Defaults(parse_mode=ParseMode.HTML))
+        .concurrent_updates(4)
+        .post_init(_post_init)
+        .build()
+    )
+    application.bot_data["settings"] = settings
 
-    admin_id_int = int(ADMIN_ID) if ADMIN_ID is not None else None
-    if admin_id_int is not None and not database.is_user_allowed(DB_PATH, admin_id_int):
-        logger.info(f"Добавление администратора {admin_id_int} в базу при первом запуске.")
-        database.add_user(DB_PATH, admin_id_int, is_admin=True)
+    for handler in admin.build_handlers():
+        application.add_handler(handler)
 
-    application = Application.builder().token(TOKEN).concurrent_updates(True).build()
-
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("admin_menu", admin_menu_command))
-    application.add_handler(CommandHandler("add_user", add_user_command))
-    application.add_handler(CommandHandler("remove_user", remove_user_command))
-    application.add_handler(CommandHandler("list_users", list_users_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-
+    private = filters.ChatType.PRIVATE
+    application.add_handler(CommandHandler("start", start, filters=private))
+    application.add_handler(CommandHandler("help", help_command, filters=private))
+    application.add_handler(CommandHandler("language", language_menu, filters=private))
+    application.add_handler(CommandHandler("cancel", cancel, filters=private))
+    application.add_handler(
+        MessageHandler(private & filters.Regex(rf"^{keyboards.BTN_LANGUAGE}$"), language_menu)
+    )
     application.add_handler(
         MessageHandler(
-            filters.TEXT & filters.Regex("Добавить пользователя"), add_user_command
+            private & filters.Regex(rf"^({keyboards.BTN_RU}|{keyboards.BTN_EN})"),
+            language_choice,
         )
     )
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & filters.Regex("Удалить пользователя"), remove_user_command
-        )
+        MessageHandler(private & filters.Regex(rf"^{keyboards.BTN_CANCEL}$"), cancel)
     )
     application.add_handler(
-        MessageHandler(
-            filters.TEXT & filters.Regex("Список пользователей"), list_users_command
-        )
+        MessageHandler(private & (filters.VOICE | filters.VIDEO_NOTE), handle_media)
     )
-    application.add_handler(
-        MessageHandler(filters.TEXT & filters.Regex(r"^\d+$"), handle_admin_id_input)
-    )
+    application.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, fallback))
+    application.add_error_handler(on_error)
+    return application
 
-    application.add_handler(
-        MessageHandler(filters.VOICE | filters.VIDEO_NOTE, handle_media)
-    )
 
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & filters.Regex("Язык"), handle_language_menu
+def main() -> int:
+    if not settings.token:
+        logger.error("TELEGRAM_BOT_TOKEN не задан — бот не может стартовать.")
+        return 1
+
+    os.makedirs(settings.data_dir, exist_ok=True)
+    database.init_db(db_path(), settings.admin_ids)
+    if not settings.admin_ids and not database.has_admins(db_path()):
+        logger.warning(
+            "ADMIN_ID не задан: администратором станет первый, кто напишет /start. "
+            "Укажите ADMIN_ID в .env, чтобы закрепить админа."
         )
-    )
-    application.add_handler(
-        MessageHandler(filters.TEXT & filters.Regex("^(Русский|Английский)"), handle_language_choice)
-    )
 
-    logger.info("Бот запущен! 🤖")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application = build_application()
+    logger.info("Запуск long polling")
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+        close_loop=False,
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
