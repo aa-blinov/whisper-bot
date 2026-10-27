@@ -48,18 +48,31 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "123456:SMOKE-TEST-TOKEN")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from telegram import Bot, Document, InlineKeyboardMarkup, Update, User, Voice  # noqa: E402
+from telegram import (  # noqa: E402
+    Audio,
+    Bot,
+    Document,
+    InlineKeyboardMarkup,
+    Update,
+    User,
+    Video,
+    Voice,
+)
 
 from app.bot import app as bot_app  # noqa: E402
 from app.bot.app import build_application  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.container import build_services  # noqa: E402
 from app.infra import database  # noqa: E402
+from app.services.transcription import TranscriptionTimeout  # noqa: E402
 
 SAMPLE = os.environ.get("SMOKE_AUDIO", "data/_test/sample.mp3")
+SAMPLE_EN = os.environ.get("SMOKE_AUDIO_EN", "data/_test/sample_en.mp3")
+SAMPLE_VIDEO = os.environ.get("SMOKE_VIDEO", "data/_test/sample.mp4")
 ADMIN_ID = 111
 GUEST_ID = 222
 NEWCOMER_ID = 333
+STRANGER_ID = 444
 
 sent: list[tuple[int | None, str, object]] = []
 edits: list[str] = []
@@ -136,8 +149,14 @@ def callback_update(user_id: int, data: str) -> dict:
 
 async def run() -> None:
     has_audio = os.path.exists(SAMPLE)
+    has_video = os.path.exists(SAMPLE_VIDEO)
+    has_english = os.path.exists(SAMPLE_EN)
     if not has_audio:
         print(f"нет файла {SAMPLE}: шаги с распознаванием будут пропущены")
+    if not has_video:
+        print(f"нет файла {SAMPLE_VIDEO}: шаг с видео будет пропущен")
+    if not has_english:
+        print(f"нет файла {SAMPLE_EN}: шаг с английским будет пропущен")
 
     database.init_db(settings.database_url, settings.admin_ids)
     application = build_application(settings, build_services(settings))
@@ -280,6 +299,27 @@ async def run() -> None:
             "заявка одобрена",
         )
 
+        # 6b. Посторонний присылает голосовое: заявка, а не расшифровка.
+        print("6b. Медиа без доступа")
+        sent.clear()
+        stranger_voice = base_message(
+            STRANGER_ID,
+            21,
+            voice={
+                "file_id": "smoke-stranger",
+                "file_unique_id": "smoke-stranger-unique",
+                "duration": 3,
+                "mime_type": "audio/ogg",
+                "file_size": 1234,
+            },
+        )
+        await process({"message": stranger_voice})
+        check(
+            any(chat == ADMIN_ID and "Заявка" in text for chat, text, _ in sent),
+            "админу ушла заявка",
+        )
+        check(not any("<pre>" in text for text in texts()), "расшифровки не было")
+
         # 7. Язык.
         print("7. Язык распознавания")
         sent.clear()
@@ -290,6 +330,48 @@ async def run() -> None:
             database.get_user(settings.database_url, ADMIN_ID).language == "ru",
             "язык сохранён в базе",
         )
+
+        # 7b. Английский язык и вторая модель.
+        print("7b. Английский язык")
+        if has_english:
+            sent.clear()
+            await process({"message": base_message(ADMIN_ID, 32, text="/language")})
+            await process({"message": base_message(ADMIN_ID, 33, text="🇬🇧 Английский")})
+            check(
+                database.get_user(settings.database_url, ADMIN_ID).language == "en",
+                "выбран английский",
+            )
+            sent.clear()
+            english_voice = base_message(
+                ADMIN_ID,
+                34,
+                voice={
+                    "file_id": "smoke-en",
+                    "file_unique_id": "smoke-en-unique",
+                    "duration": 8,
+                    "mime_type": "audio/mpeg",
+                    "file_size": 50976,
+                },
+            )
+            with patch.object(Voice, "get_file", fake_get_file), patch(
+                "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE_EN
+            ):
+                await process({"message": english_voice})
+            english = [text for text in texts() if "<pre>" in text]
+            check(bool(english), "английская расшифровка пришла")
+            if english:
+                body = english[0].lower()
+                print("     " + english[0][:160])
+                check(
+                    any(ch in body for ch in "abcdefghijklmnopqrstuvwxyz")
+                    and "привет" not in body,
+                    "текст на английском",
+                )
+            # Возвращаем русский, дальше сценарий проверяет русскую модель.
+            await process({"message": base_message(ADMIN_ID, 35, text="/language")})
+            await process({"message": base_message(ADMIN_ID, 36, text="🇷🇺 Русский")})
+        else:
+            print("  skip  нет английского файла")
 
         # 8. Голосовое сообщение: ссылка подменена, распознавание настоящее.
         print("8. Голосовое сообщение → текст (настоящий воркер)")
@@ -325,8 +407,34 @@ async def run() -> None:
         else:
             print("  skip  нет файла для распознавания")
 
-        # 9. Аудиофайл документом: mp3 приходит как document.
-        print("9. MP3 документом")
+        # 9. Аудиофайл как audio (не document).
+        print("9. Аудиофайл как audio")
+        if has_audio:
+            sent.clear()
+            audio_message = base_message(
+                ADMIN_ID,
+                50,
+                audio={
+                    "file_id": "smoke-audio",
+                    "file_unique_id": "smoke-audio-unique",
+                    "duration": 12,
+                    "mime_type": "audio/mpeg",
+                    "file_size": 69984,
+                },
+            )
+            with patch.object(Audio, "get_file", fake_get_file), patch(
+                "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE
+            ):
+                await process({"message": audio_message})
+            check(
+                any("<pre>" in text and "Привет" in text for text in texts()),
+                "audio распознан",
+            )
+        else:
+            print("  skip  нет файла")
+
+        # 10. Аудиофайл документом: mp3 приходит как document.
+        print("10. MP3 документом")
         if has_audio:
             sent.clear()
             document_message = base_message(
@@ -351,8 +459,36 @@ async def run() -> None:
         else:
             print("  skip  нет файла")
 
-        # 10. Не медиа документом: понятный отказ, без распознавания.
-        print("10. PDF документом")
+        # 11. Видеофайл: дорожку достаёт ffmpeg.
+        print("11. Видеофайл")
+        if has_video:
+            sent.clear()
+            video_message = base_message(
+                ADMIN_ID,
+                65,
+                video={
+                    "file_id": "smoke-video",
+                    "file_unique_id": "smoke-video-unique",
+                    "duration": 12,
+                    "width": 320,
+                    "height": 240,
+                    "mime_type": "video/mp4",
+                    "file_size": 69984,
+                },
+            )
+            with patch.object(Video, "get_file", fake_get_file), patch(
+                "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE_VIDEO
+            ):
+                await process({"message": video_message})
+            check(
+                any("<pre>" in text and "Привет" in text for text in texts()),
+                "видео распознано",
+            )
+        else:
+            print("  skip  нет видео")
+
+        # 12. Не медиа документом: понятный отказ, без распознавания.
+        print("12. PDF документом")
         sent.clear()
         pdf_message = base_message(
             ADMIN_ID,
@@ -368,8 +504,8 @@ async def run() -> None:
         await process({"message": pdf_message})
         check(any("не похоже" in text.lower() for text in texts()), "PDF отклонён")
 
-        # 11. Файл больше лимита: отказ до запроса к Telegram.
-        print("11. Файл больше 20 МБ")
+        # 13. Файл больше лимита: отказ до запроса к Telegram.
+        print("13. Файл больше 20 МБ")
         sent.clear()
         big_message = base_message(
             ADMIN_ID,
@@ -385,14 +521,79 @@ async def run() -> None:
         await process({"message": big_message})
         check(any("20 МБ" in text for text in texts()), "большой файл отклонён")
 
-        # 12. Посторонний текст не ломает бота.
-        print("12. Посторонний текст")
+        # 13b. Слишком длинная запись: отказ до очереди.
+        print("13b. Запись длиннее лимита")
+        sent.clear()
+        long_message = base_message(
+            ADMIN_ID,
+            85,
+            audio={
+                "file_id": "smoke-long",
+                "file_unique_id": "smoke-long-unique",
+                "duration": 400,
+                "mime_type": "audio/mpeg",
+                "file_size": 1024,
+            },
+        )
+        await process({"message": long_message})
+        check(any("Запись длится" in text for text in texts()), "длинная запись отклонена")
+
+        # 14. Удаление человека не стирает историю.
+        print("14. Удаление сохраняет историю")
+        database.record_task(
+            settings.database_url, NEWCOMER_ID, 1.0, "voice", "история после удаления", "ru"
+        )
+        with database.connect(settings.database_url) as conn:
+            before = conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE recognized_text = %s",
+                ("история после удаления",),
+            ).fetchone()["n"]
+        removed = database.remove_user(settings.database_url, NEWCOMER_ID)
+        with database.connect(settings.database_url) as conn:
+            after = conn.execute(
+                "SELECT COUNT(*) AS n FROM tasks WHERE recognized_text = %s",
+                ("история после удаления",),
+            ).fetchone()["n"]
+            orphan = conn.execute(
+                """SELECT COUNT(*) AS n FROM tasks
+                   WHERE recognized_text = %s AND user_id IS NULL""",
+                ("история после удаления",),
+            ).fetchone()["n"]
+        check(bool(removed), "пользователь удалён")
+        check(database.get_user(settings.database_url, NEWCOMER_ID) is None, "доступа больше нет")
+        check(before == after == 1 and orphan == 1, "строка истории осталась без владельца")
+
+        # 15. Посторонний текст не ломает бота.
+        print("15. Посторонний текст")
         sent.clear()
         await process({"message": base_message(ADMIN_ID, 90, text="просто текст")})
         check(
             any("голосовое" in text.lower() for text in texts()),
             "бот объяснил, что прислать",
         )
+
+        # 16. Таймаут воркера показывает понятный текст, а не падает.
+        print("16. Таймаут распознавания")
+        sent.clear()
+        service = application.bot_data["transcription"]
+        timeout_voice = base_message(
+            ADMIN_ID,
+            95,
+            voice={
+                "file_id": "smoke-timeout",
+                "file_unique_id": "smoke-timeout-unique",
+                "duration": 5,
+                "mime_type": "audio/ogg",
+                "file_size": 1234,
+            },
+        )
+        with patch.object(Voice, "get_file", fake_get_file), patch(
+            "app.bot.handlers.media.file_url", lambda ctx, f: SAMPLE
+        ), patch.object(
+            service, "transcribe", AsyncMock(side_effect=TranscriptionTimeout("тест"))
+        ):
+            await process({"message": timeout_voice})
+        check(any("затянулось" in text for text in texts()), "таймаут объяснён")
     finally:
         await application.shutdown()
         stack.close()
