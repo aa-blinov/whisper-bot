@@ -158,7 +158,8 @@ Measured on two worker threads, with the stack under load:
 | 20 clients, 12 s audio each | 10 s | 10 s |
 | 10 clients, 58 s audio each | 20 s | 20 s |
 
-A burst queues up instead of failing; the bot waits up to 120 seconds. A
+A burst queues up instead of failing; the bot waits at least 120 seconds and
+at most 900, depending on the duration the message reports. A
 one-minute message takes 2.6 to 5 seconds of worker time depending on what
 else runs on the host. To serve more at once, raise `HUEY_WORKER_COUNT`:
 threads share the loaded models, process workers take about 700 MB each.
@@ -179,7 +180,7 @@ starts. `.env.example` holds the same list with the values filled in.
 | `ADMIN_ID` | none | Numeric Telegram id of the administrator, or several separated by commas. Empty means the first `/start` claims the role. |
 | `DATABASE_URL` | `postgresql://lazy:lazy@postgres:5432/lazy` | Postgres connection string for the history. |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `lazy` | Credentials for the `postgres` service; keep them in step with `DATABASE_URL`. |
-| `DATA_DIR` | `data` | Where the worker keeps the model cache. |
+| `DATA_DIR` | `data` | Working directory of the worker; the image points `HF_HOME` at `/app/data/hf`, so the model cache lives in the `./data` volume. |
 | `MAX_MEDIA_SECONDS` | `300` | The longest recording the bot accepts. |
 | `REDIS_HOST` | `redis` | Queue host. Compose sets it to the service name. |
 | `REDIS_PORT` | `6379` | Queue port. |
@@ -222,7 +223,10 @@ resolve or an override in the environment. ffmpeg has to be on the path.
 The repository has no test command. `tests/test_bot.py` is empty, and no test
 runner is in `requirements.txt`. `scripts/smoke_flow.py` is the end-to-end
 check that is actually run: it feeds real updates through the application
-with the Telegram calls mocked and a real worker behind the queue.
+with the Telegram calls mocked and a real worker behind the queue, then
+leaves a throwaway `lazy_smoke` database behind. The audio samples live in
+`tests/fixtures/` and are part of the image, so a missing fixture fails the
+run instead of silently skipping the worker.
 
 | Path | What it holds |
 | --- | --- |
@@ -239,6 +243,7 @@ with the Telegram calls mocked and a real worker behind the queue.
 | `Dockerfile` | Two stages on `python:3.12-slim`, with ffmpeg, libsndfile1 and libgomp1. |
 | `docker-compose.yml` | The four services and the shared `./data` volume. |
 | `scripts/smoke_flow.py` | The end-to-end check against a throwaway Postgres database. |
+| `tests/fixtures/` | Short Russian, English and video samples plus a 58-second clip for the checks. |
 | `scripts/import_sqlite.py` | One-time move of an older SQLite history into Postgres. |
 | `.env.example` | The variables and their defaults. |
 

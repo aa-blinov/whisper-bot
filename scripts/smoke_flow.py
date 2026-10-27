@@ -67,10 +67,10 @@ from app.container import build_services  # noqa: E402
 from app.infra import database  # noqa: E402
 from app.services.transcription import TranscriptTooLong, TranscriptionTimeout  # noqa: E402
 
-SAMPLE = os.environ.get("SMOKE_AUDIO", "data/_test/sample.mp3")
-SAMPLE_EN = os.environ.get("SMOKE_AUDIO_EN", "data/_test/sample_en.mp3")
-SAMPLE_VIDEO = os.environ.get("SMOKE_VIDEO", "data/_test/sample.mp4")
-SAMPLE_LONG = os.environ.get("SMOKE_LONG", "data/_test/long.mp3")
+SAMPLE = os.environ.get("SMOKE_AUDIO", "tests/fixtures/sample.mp3")
+SAMPLE_EN = os.environ.get("SMOKE_AUDIO_EN", "tests/fixtures/sample_en.mp3")
+SAMPLE_VIDEO = os.environ.get("SMOKE_VIDEO", "tests/fixtures/sample.mp4")
+SAMPLE_LONG = os.environ.get("SMOKE_LONG", "tests/fixtures/long.mp3")
 ADMIN_ID = 111
 GUEST_ID = 222
 NEWCOMER_ID = 333
@@ -111,11 +111,13 @@ def markups() -> list[object]:
     return [markup for _, _, markup in sent]
 
 
-def base_message(user_id: int, message_id: int, **extra) -> dict:
+def base_message(
+    user_id: int, message_id: int, chat_type: str = "private", **extra
+) -> dict:
     data = {
         "message_id": message_id,
         "date": 1_700_000_000,
-        "chat": {"id": user_id, "type": "private"},
+        "chat": {"id": user_id, "type": chat_type},
         "from": {
             "id": user_id,
             "is_bot": False,
@@ -154,12 +156,21 @@ async def run() -> None:
     has_video = os.path.exists(SAMPLE_VIDEO)
     has_english = os.path.exists(SAMPLE_EN)
     has_long = os.path.exists(SAMPLE_LONG)
-    if not has_audio:
-        print(f"нет файла {SAMPLE}: шаги с распознаванием будут пропущены")
-    if not has_video:
-        print(f"нет файла {SAMPLE_VIDEO}: шаг с видео будет пропущен")
-    if not has_english:
-        print(f"нет файла {SAMPLE_EN}: шаг с английским будет пропущен")
+    missing = [
+        path
+        for path, present in (
+            (SAMPLE, has_audio),
+            (SAMPLE_VIDEO, has_video),
+            (SAMPLE_EN, has_english),
+            (SAMPLE_LONG, has_long),
+        )
+        if not present
+    ]
+    if missing:
+        # Без образцов проверка прошла бы, не тронув воркер. Лучше упасть.
+        print("нет тестовых файлов: " + ", ".join(missing))
+        print("они лежат в tests/fixtures и попадают в образ вместе с app/")
+        raise SystemExit(2)
 
     database.init_db(settings.database_url, settings.admin_ids)
     application = build_application(settings, build_services(settings))
@@ -249,6 +260,32 @@ async def run() -> None:
             any(isinstance(markup, InlineKeyboardMarkup) for markup in markups()),
             "панель с inline-кнопками",
         )
+
+        # 2b. В группе админка молчит: иначе список людей видит вся группа.
+        print("2b. Админка в группе")
+        sent.clear()
+        await process(
+            {"message": base_message(ADMIN_ID, 3, chat_type="group", text="/admin")}
+        )
+        check(not any("Админ-панель" in text for text in texts()), "в группе панели нет")
+        sent.clear()
+        await process(
+            {
+                "message": base_message(
+                    ADMIN_ID,
+                    3,
+                    chat_type="group",
+                    voice={
+                        "file_id": "smoke-group",
+                        "file_unique_id": "smoke-group-unique",
+                        "duration": 3,
+                        "mime_type": "audio/ogg",
+                        "file_size": 1234,
+                    },
+                )
+            }
+        )
+        check(not texts(), "в группе медиа игнорируется")
 
         # 3. Добавление по числовому ID через диалог.
         print("3. Добавление по числовому ID")

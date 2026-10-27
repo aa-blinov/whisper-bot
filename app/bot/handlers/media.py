@@ -83,6 +83,9 @@ def file_url(context: ContextTypes.DEFAULT_TYPE, telegram_file) -> str:
     path = telegram_file.file_path or ""
     if path.startswith(("http://", "https://")):
         return path
+    if path.startswith("/"):
+        # Local Bot API Server отдаёт абсолютный путь к файлу на диске.
+        return path
     return f"{context.bot.base_url}/file/{path}"
 
 

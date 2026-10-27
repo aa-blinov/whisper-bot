@@ -127,6 +127,17 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Fixed
 
+- **The admin panel could post the allowlist into a group.** Every admin
+  command, callback and conversation step now runs only in a private chat;
+  the group case is covered by the smoke test.
+- **A dead Postgres left the bot looking healthy.** `init_db` no longer
+  swallows the connection error, and both entry points delete their ready
+  file at start, so `docker compose restart` cannot inherit a stale one.
+  Verified by stopping Postgres: the bot stays unhealthy and restarts until
+  the database answers.
+- **A failed model warm-up left the worker looking healthy.** `warm_up`
+  returns a result, and the worker exits without writing the ready file when
+  either model fails.
 - **The bot token could reach the logs through ffmpeg.** When a Telegram URL
   failed to open, ffmpeg printed it in stderr and the message was logged
   verbatim. `_scrub` replaces every URL with `<url>` before logging, including
@@ -142,6 +153,10 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
   split before escaping, so a 3800-character chunk full of `<` or `&` grew
   past Telegram's 4096 limit after escaping. The transcript is escaped first
   and split with `split_escaped`, which also refuses to cut inside an entity.
+- **History was lost when access was revoked mid-task.** `record_task` retries
+  the insert without the owner instead of dropping the row.
+- **The "seven days" window spanned eight calendar dates.** It is now exactly
+  seven times twenty-four hours.
 - **The queue no longer leaks results.** `RedisHuey` kept every result in a
   hash with no expiry, so a task the bot stopped waiting for left a permanent
   key. The queue is `RedisExpireHuey` with `RESULT_TTL_SECONDS` (3600), and

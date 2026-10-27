@@ -91,22 +91,24 @@ def close_all() -> None:
 
 
 def init_db(database_url: str, admin_ids: tuple[int, ...] = ()) -> None:
-    """Создать схему и завести администраторов из окружения."""
-    try:
-        with connect(database_url) as conn:
-            conn.execute(USERS_SCHEMA)
-            conn.execute(TASKS_SCHEMA)
-            for statement in INDEXES:
-                conn.execute(statement)
-            for admin_id in admin_ids:
-                conn.execute(
-                    """INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE)
-                       ON CONFLICT (user_id) DO UPDATE SET is_admin = TRUE""",
-                    (admin_id,),
-                )
-        logger.info("Схема базы данных готова")
-    except psycopg.Error as exc:
-        logger.exception("Не удалось инициализировать базу данных: %s", exc)
+    """Создать схему и завести администраторов из окружения.
+
+    Ошибку не глотаем: без базы бот не должен выглядеть живым. Исключение
+    останавливает процесс, и Compose перезапускает его, пока Postgres не
+    поднимется.
+    """
+    with connect(database_url) as conn:
+        conn.execute(USERS_SCHEMA)
+        conn.execute(TASKS_SCHEMA)
+        for statement in INDEXES:
+            conn.execute(statement)
+        for admin_id in admin_ids:
+            conn.execute(
+                """INSERT INTO users (user_id, is_admin) VALUES (%s, TRUE)
+                   ON CONFLICT (user_id) DO UPDATE SET is_admin = TRUE""",
+                (admin_id,),
+            )
+    logger.info("Схема базы данных готова")
 
 
 def _row_to_user(row: dict) -> User:
@@ -272,6 +274,7 @@ def record_task(
     text: str,
     language: str | None = None,
 ) -> None:
+    """Записать запрос. Если человека уже удалили, строка остаётся без него."""
     try:
         with connect(database_url) as conn:
             conn.execute(
@@ -281,6 +284,20 @@ def record_task(
                    VALUES (%s, %s, %s, %s, %s, %s)""",
                 (user_id, datetime.now(), duration_seconds, file_type, text, language),
             )
+    except psycopg.errors.ForeignKeyViolation:
+        # Доступ отозвали, пока шло распознавание: историю не теряем.
+        logger.info("Пользователь %s удалён, пишу запрос без владельца", user_id)
+        try:
+            with connect(database_url) as conn:
+                conn.execute(
+                    """INSERT INTO tasks
+                       (user_id, timestamp, duration_seconds, original_file_type,
+                        recognized_text, language)
+                       VALUES (NULL, %s, %s, %s, %s, %s)""",
+                    (datetime.now(), duration_seconds, file_type, text, language),
+                )
+        except psycopg.Error as exc:
+            logger.error("Ошибка записи запроса без владельца: %s", exc)
     except psycopg.Error as exc:
         logger.error("Ошибка записи запроса пользователя %s: %s", user_id, exc)
 
@@ -290,7 +307,9 @@ def stats(database_url: str) -> Stats:
     try:
         now = datetime.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week_start = today_start - timedelta(days=7)
+        # Ровно семь суток назад, а не «начало дня минус семь дней»: иначе
+        # окно захватывает восемь календарных дат.
+        week_start = now - timedelta(days=7)
 
         with connect(database_url) as conn:
             total_users = int(

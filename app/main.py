@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from telegram import Update
 
-from app.bot.app import build_application
+from app.bot.app import READY_FILE, build_application
 from app.config import Settings
 from app.container import build_services
 from app.infra import database
@@ -26,6 +27,10 @@ def main() -> int:
         return 1
 
     os.makedirs(settings.data_dir, exist_ok=True)
+    # Файл готовности от прошлого запуска мог пережить `docker compose
+    # restart` внутри того же контейнера. Убираем его до проверки базы,
+    # иначе healthcheck покажет healthy при упавшем Postgres.
+    Path(READY_FILE).unlink(missing_ok=True)
     database.init_db(settings.database_url, settings.admin_ids)
     if not settings.admin_ids and not database.has_admins(settings.database_url):
         logger.warning(

@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 from huey.bin.huey_consumer import consumer_main
 
@@ -23,6 +24,9 @@ READY_FILE = "/tmp/worker-ready"
 def main() -> None:
     settings = Settings.from_env()
     os.makedirs(settings.data_dir, exist_ok=True)
+    # Готовность прошлого запуска не должна переживать `docker compose
+    # restart` внутри контейнера.
+    Path(READY_FILE).unlink(missing_ok=True)
 
     recognizer = Recognizer(
         settings.asr_model,
@@ -33,12 +37,19 @@ def main() -> None:
 
     started = time.time()
     # Русскую модель грузим всегда: это основной путь.
-    recognizer.warm_up()
+    ok_ru = recognizer.warm_up()
     # Английскую тоже, если она включена: иначе первый английский запрос
     # висит на скачивании 107 МБ и выглядит как зависший бот.
+    ok_en = True
     if settings.warm_up_en and settings.asr_model_en != settings.asr_model:
-        recognizer.warm_up("en")
+        ok_en = recognizer.warm_up("en")
     logger.info("Прогрев моделей занял %.1f с", time.time() - started)
+
+    if not ok_ru or not ok_en:
+        # Файл готовности не пишем: healthcheck покажет unhealthy, а
+        # restart политика перезапустит контейнер на повторную загрузку.
+        logger.error("Модель не прогрелась, воркер не готов обрабатывать запросы")
+        raise SystemExit(1)
 
     # Файл готовности читает healthcheck в docker-compose: бот увидит
     # healthy воркер только после того, как модель действительно посчитала.

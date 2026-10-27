@@ -106,11 +106,13 @@ class Recognizer:
             logger.info("Модель '%s' загружена", model_id)
             return model
 
-    def warm_up(self, language: str = "ru") -> None:
+    def warm_up(self, language: str = "ru") -> bool:
         """Загрузить модель заранее, чтобы первый запрос не ждал диск.
 
         Пустой звук дешевле всего даёт рабочую ONNX-сессию и заодно
         проверяет, что модель действительно выполняет вычисление.
+        Возвращает False, если прогрев не удался: тогда воркер не должен
+        объявлять себя готовым.
         """
         model_id, needs_language = self._model_for(language)
         try:
@@ -118,8 +120,10 @@ class Recognizer:
             probe = np.zeros(SAMPLE_RATE // 2, dtype=np.float32)
             model.recognize(probe, **({"language": "ru"} if needs_language else {}))
             logger.info("Модель '%s' прогрев прошла", model_id)
+            return True
         except Exception as exc:  # прогрев не должен ронять контейнер
-            logger.warning("Прогрев модели '%s' не удался: %s", model_id, exc)
+            logger.error("Прогрев модели '%s' не удался: %s", model_id, exc)
+            return False
 
     # --- аудио ------------------------------------------------------------
 

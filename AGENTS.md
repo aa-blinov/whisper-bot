@@ -59,6 +59,7 @@ read over HTTPS.
 | `.github/workflows/pages.yml` | Deploys `docs/` to GitHub Pages on a push to `master`. |
 | `tests/test_bot.py` | Empty. |
 | `scripts/smoke_flow.py` | End-to-end handler and worker check against a throwaway database. |
+| `tests/fixtures/` | Russian, English and video samples plus a 58-second clip; baked into the image. |
 | `scripts/load_check.py` | Concurrent clients against the real queue: latency, loop lag, Redis keys. |
 | `scripts/import_sqlite.py` | One-time move of an older SQLite history into Postgres. |
 | `scripts/make_avatar.py` | Rebuilds the circle-safe avatar from the square icon. |
@@ -154,6 +155,19 @@ read over HTTPS.
   and splits the escaped text (`split_escaped`), because splitting first and
   escaping after grows the chunk past the 4096 limit when the text has many
   `<` or `&`. Raw `<` or an oversized chunk is a rejected message.
+- **Admin handlers answer only in private chats.** `admin.build_handlers`
+  wraps every command, callback and conversation step with `_private_only`:
+  in a group `/admin` would otherwise post the whole allowlist with numeric
+  IDs. A new admin handler has to go through `_guard` too.
+- **Startup is strict on purpose.** `database.init_db` lets a connection
+  error propagate and `consumer.py` exits when `warm_up` returns False, so
+  Compose restarts the container instead of showing healthy. Both entry
+  points delete the ready file at start, because `docker compose restart`
+  keeps `/tmp` and a stale file would mark a broken process healthy.
+- **The Telegram URL sits in Redis.** The token is in the task payload and
+  therefore in the AOF, but Redis is not published, and the same token is
+  already in the container environment. Rotating the token invalidates both
+  copies; an auth-enabled Redis would be the next step if the host is shared.
 - **The chosen language lives in Postgres.** It used to be
   `context.user_data["lang"]` and reset on every restart.
 

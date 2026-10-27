@@ -22,8 +22,11 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 COPY app/ ./app/
+# Тестовые образцы для scripts/smoke_flow.py: они маленькие и должны быть
+# в образе, иначе проверка на чистом клоне пропускает распознавание.
+COPY tests/ ./tests/
 
-# Кэш моделей и база живут в том же томе, что и media: ./data:/app/data.
+# Кэш моделей живёт в томе ./data:/app/data.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/data/hf \

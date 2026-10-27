@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 
 from telegram import Message, Update
-from telegram.constants import ParseMode
+from telegram.constants import ChatType, ParseMode
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -404,6 +404,37 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
+def _private_only(callback):
+    """Админская часть работает только в личном чате.
+
+    Иначе `/admin` в группе выкладывает туда список людей с их ID, а
+    кнопки панели правят это сообщение на глазах у всей группы.
+    """
+
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if chat is None or chat.type != ChatType.PRIVATE:
+            if update.callback_query:
+                await update.callback_query.answer()
+            return ConversationHandler.END
+        return await callback(update, context)
+
+    return wrapper
+
+
+def _guard(handler):
+    """Обернуть обработчик и все его состояния проверкой типа чата."""
+    if isinstance(handler, ConversationHandler):
+        for group in [handler.entry_points, *handler.states.values(), handler.fallbacks]:
+            for inner in group:
+                _guard(inner)
+        return handler
+    callback = getattr(handler, "callback", None)
+    if callback is not None:
+        handler.callback = _private_only(callback)
+    return handler
+
+
 def build_handlers() -> list:
     """Обработчики админской части, в порядке регистрации."""
     add_conversation = ConversationHandler(
@@ -422,23 +453,26 @@ def build_handlers() -> list:
     )
 
     return [
-        add_conversation,
-        CommandHandler(["admin", "admin_menu", "panel"], panel),
-        CommandHandler("list_users", show_users),
-        CommandHandler("users", show_users),
-        CommandHandler("remove_user", show_users),
-        CommandHandler("invite", invite),
-        CommandHandler("stats", stats),
-        CallbackQueryHandler(panel, pattern=r"^admin:home$"),
-        CallbackQueryHandler(show_users, pattern=r"^admin:list$"),
-        CallbackQueryHandler(stats, pattern=r"^admin:stats$"),
-        CallbackQueryHandler(invite, pattern=r"^admin:invite$"),
-        CallbackQueryHandler(add_confirm, pattern=r"^add:\d+$"),
-        CallbackQueryHandler(user_remove, pattern=r"^user:\d+:del:yes$"),
-        CallbackQueryHandler(user_confirm_remove, pattern=r"^user:\d+:del$"),
-        CallbackQueryHandler(user_card, pattern=r"^user:\d+$"),
-        MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_ADMIN)}$"), panel),
-        MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_USERS)}$"), show_users),
-        MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_STATS)}$"), stats),
-        MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_INVITE)}$"), invite),
+        _guard(handler)
+        for handler in [
+            add_conversation,
+            CommandHandler(["admin", "admin_menu", "panel"], panel),
+            CommandHandler("list_users", show_users),
+            CommandHandler("users", show_users),
+            CommandHandler("remove_user", show_users),
+            CommandHandler("invite", invite),
+            CommandHandler("stats", stats),
+            CallbackQueryHandler(panel, pattern=r"^admin:home$"),
+            CallbackQueryHandler(show_users, pattern=r"^admin:list$"),
+            CallbackQueryHandler(stats, pattern=r"^admin:stats$"),
+            CallbackQueryHandler(invite, pattern=r"^admin:invite$"),
+            CallbackQueryHandler(add_confirm, pattern=r"^add:\d+$"),
+            CallbackQueryHandler(user_remove, pattern=r"^user:\d+:del:yes$"),
+            CallbackQueryHandler(user_confirm_remove, pattern=r"^user:\d+:del$"),
+            CallbackQueryHandler(user_card, pattern=r"^user:\d+$"),
+            MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_ADMIN)}$"), panel),
+            MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_USERS)}$"), show_users),
+            MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_STATS)}$"), stats),
+            MessageHandler(filters.Regex(rf"^{re.escape(keyboards.BTN_INVITE)}$"), invite),
+        ]
     ]

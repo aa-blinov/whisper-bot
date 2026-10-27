@@ -34,7 +34,7 @@ thought. The bot turns that recording into something they can read, edit and
 send on, without leaving the chat.
 
 Success for the person: the transcript arrives in the same chat, with the
-recognition mistakes taken out when a correction key is set. Success for the
+model's own punctuation and capital letters. Success for the
 product: the request is in the history with its duration and its text, and
 `/stats` can tell the administrator how many requests came in today and over
 the last seven days.
@@ -105,8 +105,9 @@ Confirmed by the code:
   with a confirmation.
 - The administrator reads the counters for today and for the last seven days
   from `/stats`.
-- The bot is a long-polling Telegram bot, and the deployment is three
-  containers: bot, worker, Redis.
+- The bot is a long-polling Telegram bot, and the deployment is four
+  containers: bot, worker, Postgres, Redis. The admin panel answers only in
+  private chats, so the allowlist never lands in a group.
 
 Deliberately not true, and worth knowing before a change:
 

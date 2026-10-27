@@ -2,9 +2,10 @@
 
 How lazy-to-text-bot is put together.
 
-The bot is two processes and a queue. One process talks to Telegram and owns
-the conversation; the other runs GigaAM v3 on the CPU. Redis carries the task
-between them, and the `data/` directory carries the audio file.
+The bot is two processes, a queue and a small database. One process talks to
+Telegram and owns the conversation; the other runs GigaAM v3 on the CPU.
+Redis carries the task between them, Postgres keeps the history, and the
+`data/` volume holds the model cache (media is never written to disk).
 
 For what the bot does and how to run it, read the
 [README](../README.md). For the traps that cost a rebuild to learn, read
@@ -83,9 +84,9 @@ why there is no punctuation step and no "fix the text" call, and why the
 Russian path needs exactly one ONNX session.
 
 The cost is that the Russian path is Russian-only. English goes through
-`ASR_MODEL_EN` (`whisper-base` by default), which is loaded on first use and
-returns plainer text. The language button is therefore real: it picks the
-model, not a decoder hint.
+`ASR_MODEL_EN` (`whisper-base` by default), which the worker warms at start
+unless `WARM_UP_EN=0`, and returns plainer text. The language button is
+therefore real: it picks the model, not a decoder hint.
 
 ### The transcription runs in a second process
 
