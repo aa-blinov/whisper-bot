@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Bot API отдаёт ботам файлы не больше 20 МБ, дальше get_file отвечает
 # ошибкой. Проверяем до запроса, чтобы человек получил понятный ответ.
-TELEGRAM_FILE_LIMIT = 20 * 1024 * 1024
+# С локальным сервером Bot API лимит поднимается через MAX_FILE_MB.
 
 AUDIO_EXTENSIONS = (
     ".mp3",
@@ -118,6 +118,14 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if picked is None:
         return
     if picked == "unsupported":
+        document = message.document
+        logger.info(
+            "Не медиа: пользователь %s, %s, %s, %s байт",
+            user.id,
+            getattr(document, "file_name", "?"),
+            getattr(document, "mime_type", "?"),
+            getattr(document, "file_size", 0),
+        )
         await message.reply_text(texts.UNSUPPORTED)
         return
     attachment, file_type = picked
@@ -125,14 +133,28 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     settings = deps.settings(context)
     duration = int(getattr(attachment, "duration", 0) or 0)
     if duration > settings.max_media_seconds:
+        logger.info(
+            "Слишком длинно: пользователь %s, %s, %s с",
+            user.id,
+            file_type,
+            duration,
+        )
         await message.reply_text(
             texts.media_too_long(duration, settings.max_media_seconds)
         )
         return
 
     size = int(getattr(attachment, "file_size", 0) or 0)
-    if size > TELEGRAM_FILE_LIMIT:
-        await message.reply_text(texts.FILE_TOO_BIG)
+    limit = settings.max_file_mb * 1024 * 1024
+    if size > limit:
+        logger.info(
+            "Слишком большой файл: пользователь %s, %s, %s МБ при лимите %s МБ",
+            user.id,
+            file_type,
+            round(size / 1024 / 1024, 1),
+            settings.max_file_mb,
+        )
+        await message.reply_text(texts.file_too_big(settings.max_file_mb))
         return
 
     await ensure_profile(update, context)

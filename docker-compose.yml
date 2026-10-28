@@ -88,6 +88,9 @@ services:
       - HUEY_WORKER_TYPE=${HUEY_WORKER_TYPE:-thread}
     volumes:
       - ./data:/app/data
+      # Файлы локального Bot API: воркер читает их по пути, который
+      # возвращает get_file, без скачивания по сети.
+      - bot-api-data:/var/lib/telegram-bot-api:ro
     healthcheck:
       # Воркер пишет файл после прогрева, поэтому healthy значит «модель
       # действительно посчитала», а не «процесс запустился».
@@ -100,5 +103,23 @@ services:
       redis:
         condition: service_healthy
 
+  # Локальный сервер Bot API. Нужен, чтобы принимать файлы больше 20 МБ:
+  # облачный Bot API отдаёт ботам только 20 МБ. Запускается отдельно:
+  #   docker compose --profile local-api up -d
+  # и требует TELEGRAM_API_ID и TELEGRAM_API_HASH, плюс в .env:
+  #   TELEGRAM_API_BASE=http://telegram-bot-api:8081/bot
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    container_name: lazy-telegram-api
+    profiles: ["local-api"]
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - bot-api-data:/var/lib/telegram-bot-api
+
 volumes:
   pgdata:
+  bot-api-data:

@@ -82,8 +82,15 @@ read over HTTPS.
   the decoded audio and returns the real length; `TranscriptTooLong` turns it
   into the same message the bot uses for voice messages.
 - **Telegram gives bots files up to 20 MB.** `get_file` fails above that, so
-  `handlers/media.py` checks `file_size` first and answers with a clear
-  message. The limit is Bot API's, not ours.
+  `handlers/media.py` checks `file_size` against `MAX_FILE_MB` (20 by default)
+  first and answers with a clear message. A local Bot API server under the
+  `local-api` profile lifts the cap to 2 GB: set `TELEGRAM_API_BASE`,
+  `MAX_FILE_MB=2000` and `MAX_MEDIA_SECONDS=3600` together, and keep the
+  `bot-api-data` volume mounted into the worker, which reads the file path
+  `get_file` returns.
+- **Refusals are logged.** Unsupported documents, oversized files and too
+  long recordings write the user id, type, size and duration, so a report of
+  "nothing happened" can be traced without guessing.
 - **Any media type goes through the same path.** Voice, video note, `audio`,
   `document` with an audio or video MIME type or extension, and `video`. The
   document check is `_document_is_media`: a PDF gets "это не похоже на аудио

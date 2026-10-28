@@ -154,14 +154,18 @@ async def post_init(application) -> None:
 
 def build_application(settings: Settings, services: Services):
     """Собрать приложение и положить сервисы в `bot_data`."""
-    application = (
+    builder = (
         ApplicationBuilder()
         .token(settings.token)
         .defaults(Defaults(parse_mode=ParseMode.HTML))
         .concurrent_updates(4)
         .post_init(post_init)
-        .build()
     )
+    if settings.telegram_api_base:
+        # Локальный сервер Bot API: снимает лимит 20 МБ и отдаёт файлы
+        # путём на диске, который воркер читает через общий том.
+        builder = builder.base_url(settings.telegram_api_base).local_mode(True)
+    application = builder.build()
 
     application.bot_data["settings"] = settings
     application.bot_data["access"] = services.access

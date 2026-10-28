@@ -202,6 +202,43 @@ hundred megabytes together.
 - **More than 8 vCPU buys little:** the work is already parallel inside the
   two workers, and memory stays under 1 GB.
 
+## Large files and long meetings
+
+The cloud Bot API gives bots files up to 20 MB, and the bot refuses a longer
+recording than `MAX_MEDIA_SECONDS` (3600 s by default). A song usually fits; a
+30-minute meeting exported from Bitrix often does not, and that is why an
+upload can end with "файл больше 20 МБ".
+
+To accept those, run a local Bot API server, which lifts the download limit
+to 2 GB and hands the bot a file path on disk instead of a URL:
+
+1. Take `api_id` and `api_hash` at [my.telegram.org](https://my.telegram.org/apps).
+2. Put them in `.env`, point the bot at the container, and raise the limits:
+
+   ```env
+   TELEGRAM_API_ID=123456
+   TELEGRAM_API_HASH=0123456789abcdef0123456789abcdef
+   TELEGRAM_API_BASE=http://telegram-bot-api:8081/bot
+   MAX_FILE_MB=2000
+   MAX_MEDIA_SECONDS=3600
+   ```
+
+3. Start the profile and restart the bot and the worker:
+
+   ```bash
+   docker compose --profile local-api up -d
+   docker compose up -d --force-recreate lazy-to-text-bot huey-worker
+   ```
+
+The API server keeps files in the `bot-api-data` volume, mounted read-only
+into the worker, so ffmpeg reads the recording straight from disk. Nothing is
+copied and nothing is uploaded anywhere.
+
+A one-hour recording needs about 230 MB of RAM per running task for the
+decoded buffer, so give a host that handles long meetings 4 GB. On 4 vCPU a
+minute of audio still takes about 4 seconds; an hour is roughly four minutes
+of waiting.
+
 ## Configuration
 
 Everything is an environment variable, read from `.env` when the process
@@ -214,7 +251,10 @@ starts. `.env.example` holds the same list with the values filled in.
 | `DATABASE_URL` | `postgresql://lazy:lazy@postgres:5432/lazy` | Postgres connection string for the history. |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `lazy` | Credentials for the `postgres` service; keep them in step with `DATABASE_URL`. |
 | `DATA_DIR` | `data` | Working directory of the worker; the image points `HF_HOME` at `/app/data/hf`, so the model cache lives in the `./data` volume. |
-| `MAX_MEDIA_SECONDS` | `300` | The longest recording the bot accepts. |
+| `MAX_MEDIA_SECONDS` | `3600` | The longest recording the bot accepts. The cloud API still caps the file at 20 MB; raise `MAX_FILE_MB` with the local Bot API. |
+| `MAX_FILE_MB` | `20` | The size limit before `get_file`. `20` is the cloud Bot API cap; `2000` with the local server. |
+| `TELEGRAM_API_BASE` | none | Base URL of a local Bot API server, for example `http://telegram-bot-api:8081/bot`. Empty means the cloud API. |
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | none | Credentials for the `telegram-bot-api` service under the `local-api` profile. |
 | `REDIS_HOST` | `redis` | Queue host. Compose sets it to the service name. |
 | `REDIS_PORT` | `6379` | Queue port. |
 | `REDIS_DB` | `0` | Queue database number. |

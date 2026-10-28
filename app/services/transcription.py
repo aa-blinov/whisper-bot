@@ -31,7 +31,7 @@ class TranscriptionService:
     def __init__(
         self,
         timeout_min: int = 120,
-        timeout_max: int = 900,
+        timeout_max: int = 3600,
         task=transcribe_task,
     ) -> None:
         self.timeout_min = timeout_min

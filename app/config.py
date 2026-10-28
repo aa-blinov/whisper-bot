@@ -56,6 +56,10 @@ class Settings:
     admin_ids: tuple[int, ...] = ()
     data_dir: str = "data"
     database_url: str = "postgresql://lazy:lazy@postgres:5432/lazy"
+    # Пусто: облачный Bot API. Задан: локальный сервер Bot API, который
+    # снимает лимит 20 МБ на скачивание.
+    telegram_api_base: str = ""
+    max_file_mb: int = 20
 
     redis_host: str = "redis"
     redis_port: int = 6379
@@ -66,7 +70,7 @@ class Settings:
     asr_quantization: str = "int8"
     asr_threads: int = 0
     warm_up_en: bool = True
-    max_media_seconds: int = 300
+    max_media_seconds: int = 3600
     result_ttl_seconds: int = 3600
 
     # Разобранный `.env` держим рядом, чтобы не перечитывать файл в тестах.
@@ -86,6 +90,8 @@ class Settings:
             admin_ids=_int_list(os.getenv("ADMIN_ID")),
             data_dir=data_dir,
             database_url=database_url,
+            telegram_api_base=os.getenv("TELEGRAM_API_BASE", "").strip(),
+            max_file_mb=max(1, _int(os.getenv("MAX_FILE_MB"), 20)),
             redis_host=os.getenv("REDIS_HOST", "redis").strip() or "redis",
             redis_port=_int(os.getenv("REDIS_PORT"), 6379),
             redis_db=_int(os.getenv("REDIS_DB"), 0),
@@ -95,6 +101,6 @@ class Settings:
             asr_quantization=(os.getenv("ASR_QUANTIZATION", "int8").strip() or "int8"),
             asr_threads=max(0, _int(os.getenv("ASR_THREADS"), 0)),
             warm_up_en=_bool(os.getenv("WARM_UP_EN"), True),
-            max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 300)),
+            max_media_seconds=max(1, _int(os.getenv("MAX_MEDIA_SECONDS"), 3600)),
             result_ttl_seconds=max(60, _int(os.getenv("RESULT_TTL_SECONDS"), 3600)),
         )

@@ -573,13 +573,14 @@ async def run() -> None:
         # 13b. Слишком длинная запись: отказ до очереди.
         print("13b. Запись длиннее лимита")
         sent.clear()
+        too_long_seconds = settings.max_media_seconds + 60
         long_message = base_message(
             ADMIN_ID,
             85,
             audio={
                 "file_id": "smoke-long",
                 "file_unique_id": "smoke-long-unique",
-                "duration": 400,
+                "duration": too_long_seconds,
                 "mime_type": "audio/mpeg",
                 "file_size": 1024,
             },

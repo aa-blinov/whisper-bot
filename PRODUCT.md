@@ -79,8 +79,9 @@ keep.
 Confirmed by the code:
 
 - A voice message, a video note, an audio file and a video file are
-  transcribed, up to 300 seconds and 20 MB; a PDF or another document is
-  refused with a sentence, and a bigger file is refused before any download.
+  transcribed, up to an hour of audio and 20 MB with the cloud Bot API (2 GB
+  with a local Bot API server); a PDF or another document is refused with a
+  sentence, and a bigger file is refused before any download.
 - The recognition language is Russian or English, chosen by the person, and
   it falls back to Russian.
 - The transcript arrives punctuated and capitalised: Russian is recognised by

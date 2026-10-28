@@ -15,10 +15,22 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Added
 
+- **A local Bot API server is supported under the `local-api` profile.** The
+  cloud API gives bots only 20 MB, which blocks meetings and long exports.
+  With `TELEGRAM_API_BASE` set, the bot talks to the local server, gets a
+  file path instead of a URL, and the worker reads it from the shared
+  `bot-api-data` volume: up to 2 GB, nothing copied. Needs `TELEGRAM_API_ID`
+  and `TELEGRAM_API_HASH`; see the README section "Large files and long
+  meetings".
+- **An hour of audio is accepted by default** (`MAX_MEDIA_SECONDS=3600`,
+  was 300). A ten-minute low-bitrate recording was transcribed in 47 seconds
+  and 6.6k characters. Size still depends on `MAX_FILE_MB`.
+- **Refusals are logged** with the user, the type, the size and the duration,
+  so a "nothing happened" report can be traced.
 - **Any media the person can send is accepted**: voice, video note, an audio
   document (mp3, ogg, wav, flac, m4a) and a video file. A PDF gets a plain
-  refusal, and anything above Telegram's 20 MB bot limit is refused before a
-  request to the API.
+  refusal, and anything above `MAX_FILE_MB` is refused before a request to
+  the API.
 - **The file is never copied.** The bot resolves Telegram's file URL and puts
   it in the queue; the worker's ffmpeg streams it over HTTPS and decodes in
   memory, so there is no download step, no shared media directory and nothing
