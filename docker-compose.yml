@@ -83,8 +83,9 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # Два потока на один процесс: модели общие, память не удваивается.
-      - HUEY_WORKER_COUNT=2
-      - HUEY_WORKER_TYPE=thread
+      # Значения приходят из .env, здесь только запасные.
+      - HUEY_WORKER_COUNT=${HUEY_WORKER_COUNT:-2}
+      - HUEY_WORKER_TYPE=${HUEY_WORKER_TYPE:-thread}
     volumes:
       - ./data:/app/data
     healthcheck:

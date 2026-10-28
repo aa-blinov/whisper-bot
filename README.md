@@ -194,8 +194,9 @@ number of requests; a 300-second buffer adds about 19 MB per running task.
 Disk: the image is 1.1 GB, the model cache 318 MB, Postgres and Redis a few
 hundred megabytes together.
 
-- **Minimum:** 2 vCPU, 2 GB RAM, 20 GB SSD, `ASR_THREADS=1`. A minute of
-  audio comes back in about 6 seconds, a burst of twenty short messages in 14.
+- **Minimum:** 2 vCPU, 2 GB RAM, 20 GB SSD, `ASR_THREADS=2` (or `1` if the
+  host is shared). A minute of audio comes back in about 6 seconds, a burst
+  of twenty short messages in 14.
 - **Comfortable:** 4 vCPU, 4 GB RAM, `ASR_THREADS=2`. A minute in about 4
   seconds, the same burst in 11.
 - **More than 8 vCPU buys little:** the work is already parallel inside the
@@ -221,10 +222,10 @@ starts. `.env.example` holds the same list with the values filled in.
 | `ASR_MODEL` | `gigaam-v3-e2e-ctc` | The ONNX model that handles Russian. |
 | `ASR_MODEL_EN` | `whisper-base` | The ONNX model that handles English. |
 | `ASR_QUANTIZATION` | `int8` | Weight precision; `int8`, `fp16` or empty for fp32. |
-| `ASR_THREADS` | `0` | Threads per inference; `0` lets onnxruntime decide. |
+| `ASR_THREADS` | `2` | Threads per inference. `0` lets onnxruntime decide by core count; use `0` on 8+ vCPU and `1` or `2` on 2 vCPU. |
 | `WARM_UP_EN` | `1` | Warm the English model at worker start. `0` saves 107 MB of download, but the first English message waits for it. |
 | `HF_TOKEN` | none | Optional Hugging Face token, for faster downloads. |
-| `HUEY_WORKER_COUNT` | `1` | The number of worker threads. Set to 2 in `docker-compose.yml`. |
+| `HUEY_WORKER_COUNT` | `2` | The number of worker threads, set in `.env`. |
 | `HUEY_WORKER_TYPE` | `thread` | The worker type. Threads share the models. |
 
 Nothing talks to a cloud service beyond Telegram. The transcript goes from the
