@@ -15,6 +15,14 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
 
 ### Added
 
+- **Recognition is streamed and overlaps the download.** ffmpeg's output is
+  read one second at a time, at most 27 seconds of samples are held, and each
+  25-second piece goes to the model while the next seconds arrive. A
+  five-minute file from Telegram went from 17 to 9 seconds; an hour finished
+  in 77 seconds with 827 MB of worker memory, barely above idle.
+- **The status message shows progress.** The worker writes the processed
+  seconds to Redis, the bot polls every five seconds and edits the message at
+  most every ten: "Распознаю… 40% (2:24 из 6:00)".
 - **A local Bot API server is supported under the `local-api` profile.** The
   cloud API gives bots only 20 MB, which blocks meetings and long exports.
   With `TELEGRAM_API_BASE` set, the bot talks to the local server, gets a

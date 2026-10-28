@@ -72,6 +72,24 @@ ERROR = "Что-то пошло не так. Попробуй ещё раз ил
 
 DOWNLOADS = "🎧 Получил запись…"
 RECOGNIZING = "🧠 Распознаю…"
+
+
+def _mmss(seconds: int) -> str:
+    minutes, rest = divmod(max(0, int(seconds)), 60)
+    return f"{minutes}:{rest:02d}"
+
+
+def progress(processed: int, total: int = 0) -> str:
+    """Строка статуса: сколько уже распознано, а если известна длина, то и процент."""
+    if total > 0:
+        percent = min(99, int(processed * 100 / total))
+        return (
+            f"🧠 Распознаю… {percent}% "
+            f"({_mmss(processed)} из {_mmss(total)})"
+        )
+    return f"🧠 Распознаю… {_mmss(processed)}"
+
+
 INTERNAL_ERROR = "Что-то сломалось при обработке. Попробуй ещё раз."
 TIMEOUT = "Распознавание затянулось. Попробуй ещё раз чуть позже."
 NOT_RECOGNIZED = "Не расслышал текст. Запись слишком короткая или тихая?"

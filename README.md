@@ -119,9 +119,10 @@ voice message, round video, audio file or video file
   -> app/bot/handlers/media.py: ask Telegram for the file URL (getFile)
   -> Redis: Huey task transcribe_task(url, type, language)
   -> app/infra/queue.py -> app/infra/asr.py
-       ffmpeg reads the URL over HTTPS -> 16 kHz mono float32
+       ffmpeg reads the URL over HTTPS -> 16 kHz mono float32, one second
+       at a time; every 25 seconds the buffer goes to the model
        GigaAM v3 e2e CTC (ONNX) on the CPU, 25 s chunks
-  -> Redis: the result
+  -> Redis: the result and the progress counter
   -> app/bot/handlers/media.py: the reply, then a row in Postgres
 ```
 
@@ -130,13 +131,21 @@ shared `data` volume for a request: the worker pulls the stream from Telegram
 itself, so there is no download step in the bot and no file to clean up. The
 `data` volume still holds the model cache for the worker.
 
+Decoding and recognition run at the same time: while the model transcribes
+the second 25-second chunk, the next seconds are already arriving. The
+buffer never holds more than about 27 seconds, so an hour of audio costs a
+few megabytes of RAM, not a few hundred. On a five-minute file this cut the
+wait from 17 to 9 seconds.
+
 The worker runs two threads in one process: `HUEY_WORKER_COUNT=2` and
 `HUEY_WORKER_TYPE=thread`. Threads share the loaded models, so the second
 worker costs memory for the audio buffer, not another 700 MB of weights. A
 process worker would hold its own copy.
 
 The bot waits for the result with `aget_result` and edits one status message
-while it waits: "Получил запись…", then "Распознаю…". A long transcript is
+while it waits: "Получил запись…", then "Распознаю… 40% (2:24 из 6:00)". The
+worker writes the processed seconds to Redis, and the bot polls that every
+five seconds and edits the message at most every ten. A long transcript is
 split into several messages, because Telegram caps a message at 4096
 characters.
 
@@ -237,10 +246,11 @@ The API server keeps files in the `bot-api-data` volume, mounted read-only
 into the worker, so ffmpeg reads the recording straight from disk. Nothing is
 copied and nothing is uploaded anywhere.
 
-A one-hour recording needs about 230 MB of RAM per running task for the
-decoded buffer, so give a host that handles long meetings 4 GB. On 4 vCPU a
-minute of audio still takes about 4 seconds; an hour is roughly four minutes
-of waiting.
+Streaming keeps the memory flat: an hour of audio peaked at 827 MB of total
+worker memory, barely above the idle 770 MB, and finished in 77 seconds on
+this 16-thread host. On 4 vCPU a minute of audio takes about 4 seconds, so an
+hour is a few minutes of waiting, and the status message shows the percentage
+while it runs.
 
 ## Configuration
 

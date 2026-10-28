@@ -635,6 +635,14 @@ async def run() -> None:
         check(all("<pre>" in block and "</pre>" in block for block in blocks), "каждая часть в pre")
         check(escape("<b>&") == "&lt;b&gt;&amp;", "HTML экранируется")
 
+        from app.bot import texts as bot_texts
+
+        check(
+            bot_texts.progress(90, 180) == "🧠 Распознаю… 50% (1:30 из 3:00)",
+            "прогресс с процентом",
+        )
+        check(bot_texts.progress(90) == "🧠 Распознаю… 1:30", "прогресс без длины")
+
         # 16. Таймаут воркера показывает понятный текст, а не падает.
         print("16. Таймаут распознавания")
         sent.clear()

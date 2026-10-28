@@ -111,6 +111,16 @@ read over HTTPS.
   buffer at the quietest frame within two seconds of the limit, because the
   encoder was trained on 30-second windows. Chunks the model still rejects
   are halved.
+- **The audio is streamed, not buffered whole.** `_transcribe_stream` pipes
+  ffmpeg's f32le output through a one-second byte buffer, keeps at most 27
+  seconds of samples, and transcribes each 25-second piece as it fills. Do
+  not go back to `communicate()` or a full-size array: an hour of audio would
+  cost 230 MB and the download would not overlap the recognition.
+- **Progress travels through Redis.** The worker writes `processed:total`
+  seconds under the key the bot generated (`transcribe_task` gets it as
+  `progress_key`), the service polls it every five seconds, and the handler
+  edits the status message at most every ten. The key has a 300-second TTL
+  and the service deletes it in a `finally`.
 - **The bot process must not import the model.** `app/infra/queue.py` imports
   the recogniser inside `transcribe_task`, and only
   `app/worker/consumer.py` calls `warm_up()`. Move either import to module

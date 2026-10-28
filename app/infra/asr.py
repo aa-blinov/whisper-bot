@@ -15,7 +15,9 @@ import logging
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
+import time
 
 import numpy as np
 
@@ -39,6 +41,10 @@ CUT_FRAME_SAMPLES = 1_600
 # входе короче первого окна.
 MIN_MODEL_SAMPLES = 8_000
 MIN_RETRY_SAMPLES = 4_000
+# Одна секунда float32 за одно чтение трубы и общий предел на чтение
+# источника, чтобы зависшая сеть не держала воркер бесконечно.
+STREAM_BLOCK_BYTES = SAMPLE_RATE * 4
+MAX_STREAM_SECONDS = 7_200
 
 _lock = threading.Lock()
 _models: dict[str, object] = {}
@@ -204,34 +210,171 @@ class Recognizer:
         return buf
 
     def transcribe_source(
-        self, source: str, language: str = "ru", max_seconds: int = 0
+        self,
+        source: str,
+        language: str = "ru",
+        max_seconds: int = 0,
+        progress=None,
+        total_seconds: int = 0,
     ) -> tuple[str | None, str | None, int | None]:
-        """Распознать локальный файл или ссылку Telegram.
+        """Распознать локальный файл или ссылку Telegram потоком.
 
-        Ссылку ffmpeg читает сам, поэтому копии файла на диске нет. Логи
-        не должны печатать источник: в ссылке лежит токен бота.
+        Ссылку ffmpeg читает сам, поэтому копии файла на диске нет. Звук
+        приходит кусками по секунде: как только накопилось 25 секунд, кусок
+        уходит в модель, а следующая секунда уже качается. Память не растёт
+        с длиной записи.
 
         Третий элемент ответа — длительность, если запись оказалась длиннее
         `max_seconds`. У документов Telegram нет поля `duration`, поэтому
         лимит проверяется по декодированному звуку.
         """
-        if source.startswith(("http://", "https://")):
-            audio = self._decode_with_ffmpeg(source)
-            if audio is None:
-                logger.error("Не удалось прочитать аудио по ссылке Telegram")
-                return None, None, None
-        else:
-            audio = self.decode(source)
-            if audio is None:
-                return None, None, None
+        return self._transcribe_stream(
+            source,
+            language=language,
+            max_seconds=max_seconds,
+            progress=progress,
+            total_seconds=total_seconds,
+        )
 
-        duration = int(round(len(audio) / SAMPLE_RATE))
-        if max_seconds and duration > max_seconds:
-            logger.info("Запись длиннее лимита: %s с > %s с", duration, max_seconds)
-            return None, None, duration
+    def _transcribe_stream(
+        self,
+        source: str,
+        language: str = "ru",
+        max_seconds: int = 0,
+        progress=None,
+        total_seconds: int = 0,
+    ) -> tuple[str | None, str | None, int | None]:
+        executable = shutil.which("ffmpeg")
+        if executable is None:
+            logger.error("ffmpeg не найден")
+            return None, None, None
 
-        text, recognized = self.transcribe_audio(audio, language=language)
-        return text, recognized, None
+        command = [
+            executable,
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            source,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "pipe:1",
+        ]
+
+        model_id, needs_language = self._model_for(language)
+        language_code = (language or "ru").lower()
+        if language_code not in ("ru", "en"):
+            language_code = "ru"
+        try:
+            model = self._load(model_id)
+        except Exception:
+            logger.exception("Не удалось загрузить модель %s", model_id)
+            return None, None, None
+        kwargs = {"language": language_code} if needs_language else {}
+
+        errors = tempfile.TemporaryFile()
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+        )
+
+        parts: list[str] = []
+        buffer = np.zeros(0, dtype=np.float32)
+        pending = b""
+        processed = 0
+        too_long: int | None = None
+        started = time.monotonic()
+
+        try:
+            assert process.stdout is not None
+            while True:
+                block = process.stdout.read(STREAM_BLOCK_BYTES)
+                if not block:
+                    break
+                if time.monotonic() - started > MAX_STREAM_SECONDS:
+                    logger.error("Чтение источника идёт дольше %s с", MAX_STREAM_SECONDS)
+                    break
+
+                # Труба отдаёт произвольное число байт: хвост, не кратный
+                # четырём, придерживаем до следующего чтения.
+                data = pending + block
+                usable = len(data) - len(data) % 4
+                pending = data[usable:]
+                if usable:
+                    buffer = np.concatenate(
+                        (buffer, np.frombuffer(data[:usable], dtype=np.float32))
+                    )
+
+                # Держим в памяти не больше 27 секунд: 25 на кусок плюс окно
+                # поиска тихого места для разреза.
+                while len(buffer) >= CHUNK_SAMPLES + CUT_SEARCH_SAMPLES:
+                    cut = self._cut_point(buffer, 0, CHUNK_SAMPLES)
+                    piece = buffer[:cut]
+                    buffer = buffer[cut:].copy()
+                    text = self._transcribe_chunk(model, piece, kwargs)
+                    if text:
+                        parts.append(text)
+                    processed += len(piece)
+                    if progress:
+                        progress(processed, total_seconds)
+
+                    if max_seconds and processed > max_seconds * SAMPLE_RATE:
+                        too_long = int(round(processed / SAMPLE_RATE))
+                        break
+
+                if too_long:
+                    break
+
+            if too_long is None and len(buffer):
+                if len(buffer) < MIN_MODEL_SAMPLES:
+                    buffer = np.pad(buffer, (0, MIN_MODEL_SAMPLES - len(buffer)))
+                text = self._transcribe_chunk(model, buffer, kwargs)
+                if text:
+                    parts.append(text)
+                processed += len(buffer)
+                if progress:
+                    progress(processed, total_seconds)
+
+        except Exception:
+            logger.exception("Ошибка потокового распознавания (%s)", model_id)
+            parts = []
+        finally:
+            if too_long:
+                process.kill()
+            try:
+                process.stdout.close()  # type: ignore[union-attr]
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+            if process.returncode not in (0, None) and not parts:
+                errors.seek(0)
+                stderr = _scrub(errors.read().decode("utf-8", "replace")).strip()
+                logger.warning(
+                    "ffmpeg вернул код %s: %s", process.returncode, stderr[:400]
+                )
+            errors.close()
+
+        if too_long:
+            logger.info("Запись длиннее лимита: %s с > %s с", too_long, max_seconds)
+            return None, None, too_long
+
+        text = " ".join(part for part in parts if part) or None
+        logger.info("Распознано %s символов (%s)", len(text or ""), model_id)
+        return text, language_code, None
 
     # --- распознавание ----------------------------------------------------
 

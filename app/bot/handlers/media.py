@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import time
 
 from telegram import Message, Update
@@ -163,6 +164,25 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     language = deps.access(context).language(user.id)
     status = await message.reply_text(texts.DOWNLOADS)
 
+    # Прогресс живёт в Redis: воркер пишет туда, сколько уже распознал,
+    # а бот раз в десять секунд переносит это в статусное сообщение.
+    progress_key = secrets.token_hex(8)
+    last_report = {"at": 0.0, "text": ""}
+
+    async def on_progress(processed: int, total: int) -> None:
+        now = time.monotonic()
+        if now - last_report["at"] < 10:
+            return
+        text = texts.progress(processed, total or duration)
+        if text == last_report["text"]:
+            return
+        last_report["at"] = now
+        last_report["text"] = text
+        try:
+            await status.edit_text(text)
+        except Exception as exc:
+            logger.debug("Не удалось обновить прогресс: %s", exc)
+
     started = time.time()
     try:
         telegram_file = await attachment.get_file()
@@ -172,7 +192,12 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         try:
             transcript = await deps.transcription(context).transcribe(
-                source, file_type, language, duration
+                source,
+                file_type,
+                language,
+                duration,
+                progress_key=progress_key,
+                on_progress=on_progress,
             )
         except TranscriptionTimeout:
             await status.edit_text(texts.TIMEOUT)

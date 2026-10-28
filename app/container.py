@@ -21,5 +21,9 @@ def build_services(settings: Settings) -> Services:
     return Services(
         access=AccessService(settings.database_url, settings.admin_ids),
         stats=StatsService(settings.database_url),
-        transcription=TranscriptionService(),
+        transcription=TranscriptionService(
+            redis_host=settings.redis_host,
+            redis_port=settings.redis_port,
+            redis_db=settings.redis_db,
+        ),
     )
