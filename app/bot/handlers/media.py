@@ -154,7 +154,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             round(size / 1024 / 1024, 1),
             settings.max_file_mb,
         )
-        await message.reply_text(texts.file_too_big(settings.max_file_mb))
+        await message.reply_text(
+            texts.file_too_big(settings.max_file_mb, round(size / 1024 / 1024, 1))
+        )
         return
 
     await ensure_profile(update, context)

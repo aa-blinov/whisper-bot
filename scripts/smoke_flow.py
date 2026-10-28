@@ -569,6 +569,9 @@ async def run() -> None:
         )
         await process({"message": big_message})
         check(any("20 МБ" in text for text in texts()), "большой файл отклонён")
+        refusal = " ".join(texts())
+        check("ffmpeg" in refusal, "в отказе есть команда сжатия")
+        check("<pre>" in refusal, "команда в блоке для копирования")
 
         # 13b. Слишком длинная запись: отказ до очереди.
         print("13b. Запись длиннее лимита")

@@ -207,7 +207,10 @@ hundred megabytes together.
 The cloud Bot API gives bots files up to 20 MB, and the bot refuses a longer
 recording than `MAX_MEDIA_SECONDS` (3600 s by default). A song usually fits; a
 30-minute meeting exported from Bitrix often does not, and that is why an
-upload can end with "файл больше 20 МБ".
+upload can end with "файл больше 20 МБ". The refusal is not just a number: it
+carries a ready `ffmpeg` command that compresses the audio to 32 kbit/s mono
+(an hour is about 15 MB) and a second one that cuts it into 30-minute pieces,
+each in a copyable `<pre>` block.
 
 To accept those, run a local Bot API server, which lifts the download limit
 to 2 GB and hands the bot a file path on disk instead of a URL:

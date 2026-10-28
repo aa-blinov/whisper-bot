@@ -79,15 +79,40 @@ UNSUPPORTED = (
     "Это не похоже на аудио или видео. Пришли голосовое, кружок, "
     "аудиофайл или видео."
 )
-def file_too_big(limit_mb: int) -> str:
+
+
+def file_too_big(limit_mb: int, size_mb: float = 0) -> str:
+    """Отказ с готовой командой: сжать или порезать совещание."""
+    head = (
+        f"Файл {size_mb:.0f} МБ, а лимит {limit_mb} МБ."
+        if size_mb
+        else f"Файл больше {limit_mb} МБ."
+    )
     return (
-        f"Файл больше {limit_mb} МБ, а Телеграм не отдаёт ботам такие большие "
-        "файлы. Пришли кусок покороче или сожми его."
+        f"{head} Телеграм отдаёт ботам не больше {limit_mb} МБ.\n\n"
+        "<b>Сожми звук</b>, речь останется разборчивой:\n"
+        '<pre>ffmpeg -i "совещание.mp3" -ac 1 -ar 16000 -b:a 32k '
+        '"совещание-small.mp3"</pre>\n'
+        "Часовое совещание так весит около 15 МБ.\n\n"
+        "<b>Если всё равно много, порежь по 30 минут:</b>\n"
+        '<pre>ffmpeg -ss 0 -t 1800 -i "совещание.mp3" -ac 1 -ar 16000 '
+        '-b:a 32k "часть1.mp3"</pre>\n'
+        "Второй кусок: замени <code>-ss 0</code> на <code>-ss 1800</code>.\n\n"
+        "Лимит можно поднять до 2 ГБ локальным сервером Bot API: "
+        "https://github.com/aa-blinov/lazy-to-text-bot"
+        "#large-files-and-long-meetings"
     )
 
 
 def media_too_long(duration: int, maximum: int) -> str:
-    return f"Запись длится {duration} с, а максимум {maximum}. Пришли покороче."
+    minutes = maximum // 60
+    return (
+        f"Запись длится {duration} с, а максимум {maximum} с "
+        f"(около {minutes} минут).\n\n"
+        "Порежь её на куски и пришли по очереди:\n"
+        '<pre>ffmpeg -ss 0 -t 1800 -i "запись.mp3" -ac 1 -ar 16000 '
+        '-b:a 32k "часть1.mp3"</pre>'
+    )
 
 
 def access_denied_pending() -> str:

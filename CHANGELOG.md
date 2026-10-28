@@ -27,6 +27,10 @@ All notable changes to lazy-to-text-bot. Versions are ordered newest first.
   and 6.6k characters. Size still depends on `MAX_FILE_MB`.
 - **Refusals are logged** with the user, the type, the size and the duration,
   so a "nothing happened" report can be traced.
+- **An oversized file gets a working answer, not a number.** The reply names
+  the size and the limit, then shows two copyable `ffmpeg` commands: compress
+  to 32 kbit/s mono (an hour is about 15 MB) or cut into 30-minute pieces.
+  A recording over the duration limit gets the same cutting command.
 - **Any media the person can send is accepted**: voice, video note, an audio
   document (mp3, ogg, wav, flac, m4a) and a video file. A PDF gets a plain
   refusal, and anything above `MAX_FILE_MB` is refused before a request to
